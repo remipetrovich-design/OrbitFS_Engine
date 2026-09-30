@@ -1,0 +1,147 @@
+{
+  "primaryNavigation": [],
+  "adminGroups": [
+    {
+      "label": "MCP Admin",
+      "icon": "Settings",
+      "roles": [
+        "owner",
+        "admin"
+      ],
+      "items": [
+        {
+          "label": "Runtime",
+          "href": "/admin/mcp/runtime",
+          "icon": "Server"
+        },
+        {
+          "label": "Settings",
+          "href": "/admin/mcp/settings",
+          "icon": "Settings"
+        },
+        {
+          "label": "MCP Client Registry",
+          "href": "/admin/mcp/clients",
+          "icon": "Users"
+        },
+        {
+          "label": "Logs",
+          "href": "/admin/mcp/logs",
+          "icon": "ScrollText"
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "path": "/mcp",
+      "component": "frontend/routes/mcp/+page.svelte"
+    },
+    {
+      "path": "/mcp/oss",
+      "component": "frontend/routes/mcp/oss/+page.svelte"
+    },
+    {
+      "path": "/mcp/ccs",
+      "component": "frontend/routes/mcp/ccs/+page.svelte"
+    },
+    {
+      "path": "/mcp/projects",
+      "component": "frontend/routes/mcp/projects/+page.svelte"
+    },
+    {
+      "path": "/admin/mcp/runtime",
+      "component": "frontend/routes/admin/mcp/runtime/+page.svelte"
+    },
+    {
+      "path": "/admin/mcp/settings",
+      "component": "frontend/routes/admin/mcp/settings/+page.svelte"
+    },
+    {
+      "path": "/admin/mcp/projects",
+      "component": "frontend/routes/admin/mcp/projects/+page.svelte"
+    },
+    {
+      "path": "/admin/mcp/connected-clients",
+      "component": "frontend/routes/admin/mcp/connected-clients/+page.svelte"
+    },
+    {
+      "path": "/admin/mcp/clients",
+      "component": "frontend/routes/admin/mcp/clients/+page.svelte"
+    },
+    {
+      "path": "/admin/mcp/sessions",
+      "component": "frontend/routes/admin/mcp/sessions/+page.svelte"
+    },
+    {
+      "path": "/admin/mcp/logs",
+      "component": "frontend/routes/admin/mcp/logs/+page.svelte"
+    },
+    {
+      "path": "/mcp/system",
+      "component": "frontend/routes/mcp/system/+page.svelte"
+    }
+  ],
+  "slots": [
+    {
+      "slot": "system-status",
+      "component": "frontend/lib/mcp-plugin-status.svelte"
+    },
+    {
+      "slot": "file-actions",
+      "component": "frontend/lib/file-actions.svelte"
+    },
+    {
+      "slot": "folder-actions",
+      "component": "frontend/lib/folder-actions.svelte"
+    },
+    {
+      "slot": "file-view-actions",
+      "component": "frontend/lib/file-view-actions.svelte"
+    }
+  ],
+  "routeGuards": [
+    {
+      "prefix": "/admin/mcp",
+      "roles": [
+        "owner",
+        "admin"
+      ]
+    },
+    {
+      "prefix": "/mcp",
+      "permission": "orbitfs_mcp"
+    }
+  ],
+  "navigationGroups": [
+    {
+      "label": "MCP",
+      "icon": "Plug",
+      "roles": [
+        "owner",
+        "admin",
+        "user"
+      ],
+      "items": [
+        {
+          "label": "OrbitFS Startup System (OSS)",
+          "href": "/mcp/oss",
+          "icon": "Sparkles",
+          "permission": "manage_mcp_startup"
+        },
+        {
+          "label": "Projects",
+          "href": "/mcp/projects",
+          "icon": "Folder",
+          "permission": "manage_mcp_projects"
+        },
+        {
+          "label": "Complex Context System (CCS)",
+          "href": "/mcp/ccs",
+          "icon": "Folder",
+          "permission": "manage_mcp_startup"
+        }
+      ]
+    }
+  ]
+}
