@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "mcp",
+  "name": "OrbitFS MCP",
+  "version": "1.5.0",
+  "description": "ChatGPT MCP connector, startup context, projects and client management.",
+  "detachable": true,
+  "licenseComponent": "orbitfs_mcp",
+  "packageType": "orbitfs-addon",
+  "minimumCoreVersion": "8.0.0",
+  "database": {
+    "provider": "mysql",
+    "connection": "core",
+    "required": true,
+    "tablePrefix": "mcp_",
+    "migrations": "migrations",
+    "reuseExistingServer": true,
+    "reuseExistingDatabase": true,
+    "createDatabaseIfMissing": true
+  },
+  "installer": {
+    "entry": "installer/lifecycle.js",
+    "configSchema": "config.schema.json",
+    "supports": [
+      "install",
+      "configure",
+      "test",
+      "repair",
+      "upgrade",
+      "attach",
+      "detach",
+      "uninstall"
+    ],
+    "package": "dist/orbitfs-mcp-1.5.0.ofsaddon"
+  },
+  "engine": {
+    "entry": "engine/server.js",
+    "serviceName": "OrbitFSMcpServer",
+    "defaultPort": 3939,
+    "healthPath": "/health",
+    "connectorPath": "/mcp"
+  },
+  "backend": {
+    "entry": "backend/index.js",
+    "routes": "backend/routes.js",
+    "apiPrefix": "/api/addons/mcp"
+  },
+  "frontend": {
+    "root": "frontend",
+    "registration": "frontend/registration/navigation.json",
+    "adminMenu": "MCP Admin",
+    "adminRoles": [
+      "owner",
+      "admin"
+    ]
+  },
+  "health": {
+    "entry": "installer/lifecycle.js",
+    "action": "test"
+  },
+  "uninstall": {
+    "preserveDataByDefault": true,
+    "protectedPurge": true
+  },
+  "permissions": "permissions.json"
+}

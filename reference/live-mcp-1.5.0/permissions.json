@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "addonId": "mcp",
+  "groupLabel": "OrbitFS MCP",
+  "workspaceCapabilities": [
+    {
+      "id": "mcp_use",
+      "label": "Use MCP",
+      "defaults": {
+        "owner": true,
+        "editor": true,
+        "contributor": true,
+        "viewer": false
+      },
+      "systemCapability": "mcp_use"
+    },
+    {
+      "id": "manage_mcp_startup",
+      "label": "Manage MCP startup",
+      "defaults": {
+        "owner": true,
+        "editor": false,
+        "contributor": false,
+        "viewer": false
+      },
+      "systemCapability": "mcp_manage_startup"
+    },
+    {
+      "id": "manage_mcp_preset_names",
+      "label": "Rename MCP startup presets",
+      "defaults": {
+        "owner": true,
+        "editor": false,
+        "contributor": false,
+        "viewer": false
+      },
+      "systemCapability": "mcp_manage_preset_names"
+    },
+    {
+      "id": "manage_mcp_projects",
+      "label": "Manage MCP projects",
+      "defaults": {
+        "owner": true,
+        "editor": true,
+        "contributor": false,
+        "viewer": false
+      },
+      "systemCapability": "mcp_manage_projects"
+    },
+    {
+      "id": "manage_mcp_settings",
+      "label": "Manage MCP settings",
+      "defaults": {
+        "owner": true,
+        "editor": false,
+        "contributor": false,
+        "viewer": false
+      },
+      "systemCapability": "mcp_manage_settings"
+    }
+  ],
+  "systemCapabilities": [
+    {
+      "id": "mcp_use",
+      "label": "Use MCP",
+      "defaults": {
+        "owner": true,
+        "admin": true,
+        "user": true
+      }
+    },
+    {
+      "id": "mcp_manage_startup",
+      "label": "Manage MCP startup",
+      "defaults": {
+        "owner": true,
+        "admin": true,
+        "user": false
+      }
+    },
+    {
+      "id": "mcp_manage_preset_names",
+      "label": "Rename MCP startup presets",
+      "defaults": {
+        "owner": true,
+        "admin": true,
+        "user": false
+      }
+    },
+    {
+      "id": "mcp_manage_projects",
+      "label": "Manage MCP projects",
+      "defaults": {
+        "owner": true,
+        "admin": true,
+        "user": false
+      }
+    },
+    {
+      "id": "mcp_manage_settings",
+      "label": "Manage MCP settings",
+      "defaults": {
+        "owner": true,
+        "admin": true,
+        "user": false
+      }
+    }
+  ]
+}

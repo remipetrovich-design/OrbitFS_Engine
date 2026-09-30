@@ -1,0 +1,26 @@
+name-template: 'OrbitFS Engine Update v$RESOLVED_VERSION'
+tag-template: 'orbitfs-update-$RESOLVED_VERSION'
+change-template: '- $TITLE (#$NUMBER)'
+change-title-escapes: '\\<>&'
+version-resolver:
+  major:
+    labels:
+      - 'major'
+  minor:
+    labels:
+      - 'minor'
+  patch:
+    labels:
+      - 'patch'
+  default: patch
+categories:
+  - title: 'Engine changes'
+    labels:
+      - 'engine'
+      - 'apex'
+      - 'mcp'
+      - 'studio'
+  - title: 'Fixes'
+    labels:
+      - 'fix'
+      - 'bug'
