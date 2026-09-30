@@ -1,0 +1,12 @@
+SET @orbitfs_mcp_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='mcp_context_bundle_entries' AND COLUMN_NAME='attachment_type')=0, "ALTER TABLE mcp_context_bundle_entries ADD COLUMN attachment_type ENUM('path','profile') NOT NULL DEFAULT 'path' AFTER item_path", 'SELECT 1');
+PREPARE orbitfs_mcp_stmt FROM @orbitfs_mcp_sql;
+EXECUTE orbitfs_mcp_stmt;
+DEALLOCATE PREPARE orbitfs_mcp_stmt;
+SET @orbitfs_mcp_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='mcp_context_bundle_entries' AND COLUMN_NAME='profile_id')=0, 'ALTER TABLE mcp_context_bundle_entries ADD COLUMN profile_id VARCHAR(120) NULL AFTER attachment_type', 'SELECT 1');
+PREPARE orbitfs_mcp_stmt FROM @orbitfs_mcp_sql;
+EXECUTE orbitfs_mcp_stmt;
+DEALLOCATE PREPARE orbitfs_mcp_stmt;
+SET @orbitfs_mcp_sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='mcp_context_bundle_entries' AND COLUMN_NAME='profile_name')=0, 'ALTER TABLE mcp_context_bundle_entries ADD COLUMN profile_name VARCHAR(160) NULL AFTER profile_id', 'SELECT 1');
+PREPARE orbitfs_mcp_stmt FROM @orbitfs_mcp_sql;
+EXECUTE orbitfs_mcp_stmt;
+DEALLOCATE PREPARE orbitfs_mcp_stmt;
