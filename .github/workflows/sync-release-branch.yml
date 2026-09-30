@@ -1,0 +1,120 @@
+name: Manual Promote Main to Update Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type PROMOTE to validate current main and move UPDATE_RELEASE to it
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: manual-promote-update-release
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require explicit promotion confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = "PROMOTE"
+
+      - name: Resolve latest main commit
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test -n "$sha"
+          echo "target_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Validating latest main: $sha"
+
+      - name: Checkout latest main exactly
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.target_sha }}
+          fetch-depth: 0
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate customer database migration history
+        run: npm run db:migrations:check
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Validate update tooling syntax
+        run: |
+          node --check tools/database-migrations.mjs
+          node --check tools/check-database-migrations.mjs
+          node --check tools/build-engine-release.mjs
+          node --check tools/build-update-bundle.mjs
+          node --check tools/build-release-analysis.mjs
+          node --check tools/select-compatible-base-release.mjs
+          node tools/select-compatible-base-release.mjs --self-test
+          grep -q "orbitfs-db-migrations-v1" tools/database-migrations.mjs
+          grep -q "orbitfs-db-migrations-v1" tools/build-update-bundle.mjs
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verify release branch ancestry and database inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin UPDATE_RELEASE --prune
+          git merge-base --is-ancestor origin/UPDATE_RELEASE HEAD || {
+            echo "::error::UPDATE_RELEASE has diverged from main. Reconcile migration history without force-pushing."
+            exit 1
+          }
+          changed_migrations="$(git diff --name-status origin/UPDATE_RELEASE HEAD -- supabase/migrations)"
+          if printf '%s\n' "$changed_migrations" | awk 'NF && $1 != "A" {bad=1; print "Immutable migration changed or deleted: " $0} END {exit !bad}'; then
+            echo "::error::Existing Engine migrations may not be modified/deleted. Add forward migrations instead."
+            exit 1
+          fi
+          node tools/check-database-migrations.mjs
+          echo "Engine migration tree validated at $(git rev-parse HEAD)"
+          git ls-tree -r HEAD supabase/migrations | sha256sum
+
+      - name: Promote validated main to UPDATE_RELEASE
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: UPDATE_RELEASE
+          TARGET_SHA: ${{ steps.source.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$RELEASE_BRANCH" --jq '.object.sha' 2>/dev/null || true)"
+          if [ -z "$current" ]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$RELEASE_BRANCH" -f sha="$TARGET_SHA" >/dev/null
+          elif [ "$current" != "$TARGET_SHA" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$RELEASE_BRANCH" -f sha="$TARGET_SHA" -F force=false >/dev/null
+          fi
+          actual="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$RELEASE_BRANCH" --jq '.object.sha')"
+          test "$actual" = "$TARGET_SHA"
+          git fetch origin "$RELEASE_BRANCH" --prune
+          main_db_tree="$(git rev-parse "HEAD:supabase/migrations")"
+          release_db_tree="$(git rev-parse "origin/$RELEASE_BRANCH:supabase/migrations")"
+          test "$main_db_tree" = "$release_db_tree" || {
+            echo "::error::Promoted release branch migrations differ from inspected main."
+            exit 1
+          }
+          echo "$RELEASE_BRANCH now points to validated main $TARGET_SHA with identical database migrations."
