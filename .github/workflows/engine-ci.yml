@@ -1,0 +1,52 @@
+name: Engine Validation (No Deployment)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Validate immutable Engine DB migration tree
+        run: npm run db:migrations:check
+      - name: Typecheck
+        run: npm run check
+      - name: Build
+        run: npm run build
+      - name: Validate release tooling
+        run: |
+          node --check tools/database-migrations.mjs
+          node --check tools/build-engine-release.mjs
+          node --check tools/build-update-bundle.mjs
+          node tools/select-compatible-base-release.mjs --self-test
+      - name: Build and verify full Engine baseline and customer DB bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/build-engine-release.mjs \
+            --version 0.0.0-ci --components mcp,apex,studio \
+            --commit "$GITHUB_SHA" --minimum-base-version 1.0.0 \
+            --output /tmp/orbitfs-engine-ci.json.gz
+          node tools/build-update-bundle.mjs \
+            --version 0.0.0-ci --components mcp,apex,studio \
+            --commit "$GITHUB_SHA" --minimum-base-version 1.0.0 \
+            --engine-artifact /tmp/orbitfs-engine-ci.json.gz \
+            --output /tmp/orbitfs-update-ci.json.gz
+          node tools/verify-engine-database-package.mjs \
+            /tmp/orbitfs-update-ci.json.gz "$GITHUB_SHA"

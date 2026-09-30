@@ -1,0 +1,43 @@
+name: Production Gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Validate customer database migration history
+        run: npm run db:migrations:check
+      - name: Typecheck
+        run: npm run check
+      - name: Validate update tooling syntax
+        run: |
+          node --check tools/database-migrations.mjs
+          node --check tools/check-database-migrations.mjs
+          node --check tools/build-engine-release.mjs
+          node --check tools/build-update-bundle.mjs
+          node --check tools/build-release-analysis.mjs
+          node --check tools/select-compatible-base-release.mjs
+          node tools/select-compatible-base-release.mjs --self-test
+          grep -q "orbitfs-db-migrations-v1" tools/database-migrations.mjs
+          grep -q "orbitfs-db-migrations-v1" tools/build-update-bundle.mjs
+      - name: Production build
+        run: npm run build

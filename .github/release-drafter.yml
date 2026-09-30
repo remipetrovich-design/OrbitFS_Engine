@@ -1,0 +1,41 @@
+name-template: 'OrbitFS $RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+change-template: '- $TITLE (#$NUMBER)'
+change-title-escapes: '\<*_&'
+categories:
+  - title: 'Features'
+    semver-increment: minor
+    when:
+      labels:
+        - feature
+        - enhancement
+  - title: 'Fixes'
+    when:
+      labels:
+        - fix
+        - bug
+        - bugfix
+  - title: 'Engine Runtime'
+    when:
+      labels:
+        - engine
+        - apex
+        - mcp
+        - studio
+  - title: 'Maintenance'
+    when:
+      labels:
+        - chore
+        - maintenance
+  - type: pre-exclude
+    when:
+      label: skip-changelog
+  - type: version-resolver
+    semver-increment: major
+    when:
+      label: major
+  - type: version-resolver
+    semver-increment: patch
+template: |
+  ## Changes
+  $CHANGES

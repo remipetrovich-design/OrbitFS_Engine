@@ -1,0 +1,493 @@
+name: Build OrbitFS Engine Update Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Update version (e.g. 1.0.0, v1.0.0.0, v.1.0.0, B0.0.0, D.0.0.0)
+        required: true
+        type: string
+      source_sha:
+        description: Exact UPDATE_RELEASE commit inspected by Dev Panel
+        required: true
+        type: string
+      channel:
+        description: Release delivery channel (stable, beta, dev, or custom configured channel)
+        required: true
+        default: stable
+        type: string
+      base_channel:
+        description: Base release channel to search for a compatible published Base at or above the minimum version
+        required: true
+        default: stable
+        type: string
+      apex:
+        description: APEX engine changed
+        required: true
+        default: false
+        type: boolean
+      mcp:
+        description: MCP engine changed
+        required: true
+        default: false
+        type: boolean
+      studio:
+        description: Studio engine changed
+        required: true
+        default: false
+        type: boolean
+      minimum_deployer_protocol:
+        description: Minimum Base Engine Deployer protocol required by this Engine package
+        required: true
+        default: "1"
+        type: string
+      minimum_base_version:
+        description: Minimum OrbitFS Base compatibility floor; newer approved published Base versions are valid
+        required: true
+        type: string
+      previous_source_commit:
+        description: Previous approved Engine source commit supplied by the Release Control Panel
+        required: false
+        default: ""
+        type: string
+      notes:
+        description: Release notes supplied by the Release Control Panel
+        required: false
+        type: string
+      changed_files:
+        description: JSON list of files detected by the Release Control Panel
+        required: false
+        default: "[]"
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  candidate:
+    outputs:
+      release_id: ${{ steps.master-release.outputs.id }}
+      license_master_url: ${{ steps.license-master.outputs.url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve Engine update components
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_NAME" != "UPDATE_RELEASE" ]; then
+            echo "::error::Engine/add-on update candidates may only be built from UPDATE_RELEASE. Use the UPDATE_RELEASE branch for update candidates."
+            exit 1
+          fi
+
+          components=()
+          if [ "${{ inputs.apex }}" = "true" ]; then components+=(apex); fi
+          if [ "${{ inputs.mcp }}" = "true" ]; then components+=(mcp); fi
+          if [ "${{ inputs.studio }}" = "true" ]; then components+=(studio); fi
+          if [ ${#components[@]} -eq 0 ]; then
+            echo "::error::Select at least one normal update target (APEX, MCP, or Studio)."
+            exit 1
+          fi
+          component_csv=$(IFS=,; echo "${components[*]}")
+          echo "components=$component_csv" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact inspected Engine source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+
+      - name: Verify UPDATE_RELEASE source identity
+        env:
+          INSPECTED_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$INSPECTED_SHA" || { echo "::error::Checked-out source does not match Dev Panel inspection."; exit 1; }
+          git fetch origin UPDATE_RELEASE --prune
+          test "$(git rev-parse origin/UPDATE_RELEASE)" = "$INSPECTED_SHA" || { echo "::error::UPDATE_RELEASE moved after Dev Panel inspection. Inspect again before building."; exit 1; }
+
+      - name: Require release database tree to match current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --prune
+          release_tree="$(git rev-parse "HEAD:supabase/migrations")"
+          main_tree="$(git rev-parse "origin/main:supabase/migrations")"
+          if [ "$release_tree" != "$main_tree" ]; then
+            echo "::error::UPDATE_RELEASE database migrations differ from main. Promote and validate main before packaging."
+            git diff --name-status HEAD origin/main -- supabase/migrations || true
+            exit 1
+          fi
+          echo "Stage 1 Engine database migrations match current main at the inspected UPDATE_RELEASE commit."
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Engine dependencies
+        shell: bash
+        run: npm ci
+
+      - name: Build Engine source
+        shell: bash
+        run: npm run build
+
+      - name: Validate customer database migration history
+        shell: bash
+        run: npm run db:migrations:check
+
+      - name: Normalize License Manager URL
+        id: license-master
+        env:
+          RAW_LICENSE_MASTER_URL: ${{ vars.LICENSE_MASTER_URL || 'https://incendiarynetworks.cc/api/v1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized="$(RAW_LICENSE_MASTER_URL="$RAW_LICENSE_MASTER_URL" node - <<'NODE'
+          const raw=String(process.env.RAW_LICENSE_MASTER_URL||'').trim();
+          const u=new URL(raw);
+          if(u.protocol!=='https:'||u.hostname!=='incendiarynetworks.cc'||u.search||u.hash)throw new Error('LICENSE_MASTER_URL must point to https://incendiarynetworks.cc');
+          let path=u.pathname.replace(/\/+$/,'');
+          if(path==='/api')path='/api/v1';
+          if(path==='/api/v1'){}
+          else throw new Error('LICENSE_MASTER_URL path must be /api or /api/v1');
+          u.pathname=path;
+          process.stdout.write(u.toString().replace(/\/$/,''));
+          NODE
+          )"
+          echo "url=$normalized" >> "$GITHUB_OUTPUT"
+          echo "License Manager API: $normalized"
+
+      - name: Validate release channel in License Master
+        env:
+          LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
+          LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
+          CHANNEL: ${{ inputs.channel }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$LICENSE_MASTER_URL" || { echo "::error::License Manager URL normalization failed"; exit 1; }
+          channels="$(curl --fail-with-body --silent --show-error -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" "$LICENSE_MASTER_URL/release-channels?include_disabled=false")"
+          CHANNEL="$CHANNEL" CHANNELS="$channels" node -e 'const c=process.env.CHANNEL,j=JSON.parse(process.env.CHANNELS),ok=(j.channels||[]).some(x=>x.channel===c&&x.enabled===true); if(!ok) throw new Error("Release channel is not configured or is disabled in License Master: "+c);'
+      - name: Resolve previous approved Engine source commit
+        id: previous
+        env:
+          LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
+          LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
+          SUPPLIED_PREVIOUS_COMMIT: ${{ inputs.previous_source_commit }}
+          CHANNEL: ${{ inputs.channel }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$LICENSE_MASTER_API_TOKEN" || { echo "::error::Missing LICENSE_MASTER_API_TOKEN"; exit 1; }
+          previous="$SUPPLIED_PREVIOUS_COMMIT"
+          if [ -z "$previous" ]; then
+            response="$(curl --fail-with-body --silent --show-error -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" "$LICENSE_MASTER_URL/releases?product=orbitfs_base&channel=$CHANNEL&type=update")"
+            previous="$(printf '%s' "$response" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s||'{}'),rows=(j.releases||[]).filter(r=>r.status==='published'&&r.review_status==='approved'&&r.source_sha).sort((a,b)=>new Date(b.published_at||b.created_at||0)-new Date(a.published_at||a.created_at||0));process.stdout.write(String(rows[0]?.source_sha||''));})")"
+          fi
+          echo "commit=$previous" >> "$GITHUB_OUTPUT"
+          if [ -n "$previous" ]; then echo "Previous approved Engine release source: $previous"; else echo "No previous approved Engine source found; creating baseline analysis."; fi
+      - name: Reject version rollback against License Master
+        env:
+          LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
+          LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$LICENSE_MASTER_API_TOKEN" || { echo "::error::Missing LICENSE_MASTER_API_TOKEN"; exit 1; }
+          response="$(curl --fail-with-body --silent --show-error -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" "$LICENSE_MASTER_URL/releases?product=orbitfs_base&channel=$CHANNEL&type=update")"
+          printf '%s' "$response" | VERSION="$VERSION" node tools/assert-release-version-progression.mjs
+          echo "Version $VERSION advances beyond the current published $CHANNEL release."
+      - name: Generate Engine update changelog
+        shell: bash
+        env:
+          PREVIOUS_COMMIT: ${{ steps.previous.outputs.commit }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          DEVELOPER_NOTES: ${{ inputs.notes }}
+          DEVELOPER_CHANGED_FILES: ${{ inputs.changed_files }}
+        run: |
+          set -euo pipefail
+          if [ -n "$DEVELOPER_NOTES" ]; then
+            printf "%s\n" "$DEVELOPER_NOTES" > release-notes.md
+          else
+          {
+            echo "# OrbitFS Engine Update — v$RELEASE_VERSION"
+            echo
+            echo "**Release type:** Differential Engine Update"
+            echo
+            echo "**Source:** $GITHUB_REPOSITORY@$GITHUB_REF_NAME"
+            echo
+            echo "**Commit:** $GITHUB_SHA"
+            echo
+            echo "## Changes"
+            if [ -n "$PREVIOUS_COMMIT" ]; then
+              git log --format='- %s (%h)' "$PREVIOUS_COMMIT..$GITHUB_SHA" | head -n 200 || true
+              echo
+              echo "## Changed files"
+              git diff --name-status "$PREVIOUS_COMMIT" "$GITHUB_SHA" | head -n 600 || true
+            else
+              echo "- Initial Engine update baseline."
+            fi
+            if [ -n "$DEVELOPER_NOTES" ]; then
+              echo
+              echo "## Developer Page inputs"
+              printf "%s\n" "$DEVELOPER_NOTES"
+            fi
+            if [ -n "$DEVELOPER_CHANGED_FILES" ] && [ "$DEVELOPER_CHANGED_FILES" != "[]" ]; then
+              echo
+              echo "## Files detected by Developer Page"
+              printf "%s" "$DEVELOPER_CHANGED_FILES" | jq -r '.[] | "- \(.status // "M") \(.filename)"' || true
+            fi
+          } > release-notes.md
+          fi
+          echo '{}' > release-drafter.json
+
+      - name: Build deterministic release analysis
+        shell: bash
+        run: |
+          node tools/build-release-analysis.mjs \
+            --kind engine \
+            --from "${{ steps.previous.outputs.commit }}" \
+            --to "${{ inputs.source_sha }}" \
+            --release-drafter release-drafter.json \
+            --output release-analysis.json
+
+      - name: Resolve affected Engine components from detected changes
+        id: affected
+        shell: bash
+        env:
+          REQUESTED: ${{ steps.release.outputs.components }}
+        run: |
+          set -euo pipefail
+          detected="$(node -e 'const j=require("./release-analysis.json"); const allowed=["apex","mcp","studio"],out=[]; for(const raw of (j.detectedComponents||[])){const x=String(raw||"").toLowerCase(); if(x==="shared"){for(const c of ["apex","mcp","studio"])if(!out.includes(c))out.push(c);} else if(allowed.includes(x)&&!out.includes(x))out.push(x);} console.log(out.join(","))' )"
+          resolved="$(REQUESTED="$REQUESTED" DETECTED="$detected" node -e 'const allowed=["apex","mcp","studio"], out=[]; for(const raw of [process.env.REQUESTED,process.env.DETECTED]) for(const value of String(raw||"").split(",")){const x=value.trim().toLowerCase(); if(allowed.includes(x)&&!out.includes(x))out.push(x)} process.stdout.write(out.join(","))')"
+          test -n "$resolved" || { echo "::error::No valid update targets resolved."; exit 1; }
+          echo "components=$resolved" >> "$GITHUB_OUTPUT"
+          if [ -n "$detected" ]; then
+            echo "Requested update targets: $REQUESTED"
+            echo "Detected source targets: $detected"
+            echo "Resolved update targets: $resolved"
+          else
+            echo "No component-specific paths detected; retaining requested targets: $resolved"
+          fi
+      - name: Validate published Base compatibility
+        id: base-compatibility
+        env:
+          BASE_CHANNEL: ${{ inputs.base_channel }}
+          LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
+          LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
+          MINIMUM_BASE_VERSION: ${{ inputs.minimum_base_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MINIMUM_BASE_VERSION" || { echo "::error::A minimum published Base version is required."; exit 1; }
+          test -n "$LICENSE_MASTER_API_TOKEN" || { echo "::error::Missing LICENSE_MASTER_API_TOKEN"; exit 1; }
+          response="$(curl --fail-with-body --silent --show-error -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" "$LICENSE_MASTER_URL/releases?product=orbitfs_base&type=base&channel=$BASE_CHANNEL")"
+          if ! selection="$(printf '%s' "$response" | node tools/select-compatible-base-release.mjs --minimum "$MINIMUM_BASE_VERSION" --channel "$BASE_CHANNEL")"; then
+            echo "::error::No approved published Base release at or above minimum $MINIMUM_BASE_VERSION with the customer database snapshot contract exists in Base channel $BASE_CHANNEL."
+            exit 1
+          fi
+          base_id="$(jq -r '.id' <<<"$selection")"
+          compatible_version="$(jq -r '.version' <<<"$selection")"
+          base_source="$(jq -r '.source' <<<"$selection")"
+          echo "id=$base_id" >> "$GITHUB_OUTPUT"
+          echo "version=$compatible_version" >> "$GITHUB_OUTPUT"
+          echo "minimum_version=$MINIMUM_BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "source=$base_source" >> "$GITHUB_OUTPUT"
+
+          echo "Base compatibility validated: minimum $MINIMUM_BASE_VERSION; compatible published Base $compatible_version ($base_id) from $BASE_CHANNEL"
+
+      - name: Build private Engine candidate
+        env:
+          CHANGED_FILES: ${{ inputs.changed_files }}
+        run: >-
+          node tools/build-engine-release.mjs
+          --version "${{ inputs.version }}"
+          --components "${{ steps.affected.outputs.components }}"
+          --minimum-deployer-protocol "${{ inputs.minimum_deployer_protocol }}"
+          --minimum-base-version "${{ inputs.minimum_base_version }}"
+          --commit "${{ inputs.source_sha }}"
+          --release-notes release-notes.md
+          --release-analysis release-analysis.json
+          --changed-files "$CHANGED_FILES"
+          --output engine-release.json.gz
+
+      - name: Build normal OrbitFS update bundle
+        env:
+          COMPONENTS: ${{ steps.affected.outputs.components }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/build-update-bundle.mjs             --version "${{ inputs.version }}"             --components "$COMPONENTS"             --minimum-deployer-protocol "${{ inputs.minimum_deployer_protocol }}"             --minimum-base-version "${{ inputs.minimum_base_version }}"             --base-channel "${{ inputs.base_channel }}"             --commit "${{ inputs.source_sha }}"             --engine-artifact engine-release.json.gz             --release-notes release-notes.md             --release-analysis release-analysis.json             --output update-release.json.gz
+
+      - name: Validate OrbitFS update bundle
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          MINIMUM_BASE_VERSION: ${{ inputs.minimum_base_version }}
+          BASE_CHANNEL: ${{ inputs.base_channel }}
+          MINIMUM_DEPLOYER_PROTOCOL: ${{ inputs.minimum_deployer_protocol }}
+          COMPONENTS: ${{ steps.affected.outputs.components }}
+        run: |
+          set -euo pipefail
+          test -s update-release.json.gz
+          node - <<'NODE'
+          const fs=require('fs'),crypto=require('crypto'),{gunzipSync}=require('node:zlib');
+          const p=JSON.parse(gunzipSync(fs.readFileSync('update-release.json.gz')).toString('utf8'));
+          if(p.schemaVersion!==3||p.format!=='orbitfs-update-bundle-v3')throw new Error('Invalid Update Bundle schema');
+          if(p.version!==process.env.VERSION||p.sourceCommit!==process.env.SOURCE_SHA)throw new Error('Update Bundle source/version mismatch');
+          if(p.minimumBaseVersion!==process.env.MINIMUM_BASE_VERSION)throw new Error('Update Bundle minimum Base compatibility mismatch');
+          if(p.baseCompatibilityChannel!==process.env.BASE_CHANNEL)throw new Error('Update Bundle Base compatibility channel mismatch');
+          if(Number(p.minimumEngineDeployerProtocol)!==Number(process.env.MINIMUM_DEPLOYER_PROTOCOL))throw new Error('Update Bundle deployer protocol mismatch');
+          const expected=process.env.COMPONENTS.split(',').filter(Boolean).sort().join(',');
+          const actual=(p.components||[]).slice().sort().join(',');
+          if(expected!==actual)throw new Error('Update Bundle targets do not match workflow targets');
+          if((p.components||[]).includes('base'))throw new Error('Normal updater must not target Base');
+          if(p.payloads?.panel)throw new Error('Normal updater must not contain a Base/Panel payload');
+          const policy=p.executionPolicy||{};
+          if(policy.mode!=='per-installation-entitlement-intersection-v1'||policy.fileClassification!=='component'||policy.sharedFiles!=='always-required'||policy.componentFiles!=='apply-only-when-authorized')throw new Error('Update Bundle component execution policy is invalid');
+          const counts=p.componentFileCounts||{};
+          for(const key of ['shared','apex','mcp','studio'])if(!Number.isInteger(Number(counts[key]||0))||Number(counts[key]||0)<0)throw new Error('Update Bundle component file counts are invalid');
+          const engineTargets=p.components||[];
+          if(engineTargets.length&&!p.payloads?.engine)throw new Error('Engine/add-on targets are missing Engine payload');
+          if(!engineTargets.length&&p.payloads?.engine)throw new Error('Unexpected Engine payload');
+          let files=0;
+          for(const [name,payload] of Object.entries(p.payloads||{})){
+            if(!payload)continue;
+            if(!Array.isArray(payload.files)||!payload.files.length)throw new Error(name+' payload file list invalid');
+            for(const f of payload.files){
+              const d=Buffer.from(f.data,'base64');
+              if(d.length!==f.size||crypto.createHash('sha256').update(d).digest('hex')!==f.sha256)throw new Error(name+' payload integrity failure: '+f.file);
+            }
+            files+=payload.files.length;
+          }
+          if(files!==p.fileCount)throw new Error('Update Bundle file count mismatch');
+          const db=p.database,migrations=Array.isArray(db?.migrations)?db.migrations:[];
+          if(!db||db.format!=='orbitfs-db-migrations-v1'||db.mode!=='shared-panel'||db.provider!=='supabase')throw new Error('Update Bundle database contract invalid');
+          if(Number(db.migrationCount||0)!==migrations.length||Number(p.databaseMigrationCount||0)!==migrations.length)throw new Error('Update Bundle database migration count mismatch');
+          const changedMigrationCount=Number(p.databaseChangedMigrationCount||0);
+          if(!Number.isInteger(changedMigrationCount)||changedMigrationCount<0||changedMigrationCount>migrations.length)throw new Error('Update Bundle changed migration count invalid');
+          if(p.releaseAnalysis?.flags?.schemaChanged===true&&changedMigrationCount<1)throw new Error('Schema change has no new immutable database migration');
+          const migrationIds=new Set();
+          for(const m of migrations){
+            const file=String(m?.file||'').replaceAll('\\','/');
+            if(/^supabase\/migrations\/base\//.test(file))throw new Error('Normal updater must not carry Base database migrations: '+file);
+            const match=file.match(/^supabase\/migrations\/(shared|apex|mcp|studio)\/\d{14}_[A-Za-z0-9._-]+\.sql$/);
+            if(!match||m.encoding!=='base64'||typeof m.data!=='string')throw new Error('Invalid database migration: '+file);
+            if(!/^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$/.test(String(m.id||''))||migrationIds.has(String(m.id)))throw new Error('Invalid or duplicate database migration id');
+            migrationIds.add(String(m.id));
+            if(String(m.component||'').toLowerCase()!==match[1])throw new Error('Database migration component/path mismatch: '+file);
+            if(match[1]==='shared'){if(!p.components?.length)throw new Error('Shared migration requires update target');}
+            else if(!p.components.includes(match[1]))throw new Error('Migration targets unselected component: '+file);
+            const d=Buffer.from(m.data,'base64'),sha=crypto.createHash('sha256').update(d).digest('hex');
+            if(d.length!==Number(m.size)||sha!==String(m.sha256||'').toLowerCase())throw new Error('Database migration integrity failure: '+file);
+          }
+          if(p.payloads?.engine&&JSON.stringify(p.payloads.engine.database||null)!==JSON.stringify(db))throw new Error('Engine payload database contract mismatch');
+          if(!p.releaseNotes||typeof p.releaseNotes!=='string')throw new Error('Update changelog missing');
+          if(!p.releaseAnalysis||typeof p.releaseAnalysis!=='object')throw new Error('Update release analysis missing');
+          console.log('Update Bundle v3 validated:',p.components.join(','),'files='+files);
+          NODE
+
+      - name: Calculate release checksum
+        id: checksum
+        shell: bash
+        run: echo "sha256=$(sha256sum update-release.json.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish Update Bundle to GitHub Release
+        id: github-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_TYPE: update
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="${{ inputs.source_sha }}"
+          TAG="orbitfs-${RELEASE_TYPE}-${VERSION}-${SOURCE_SHA:0:8}-run-${GITHUB_RUN_ID}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Using existing GitHub release $TAG"
+          else
+            gh release create "$TAG" update-release.json.gz \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" \
+              --title "OrbitFS ${RELEASE_TYPE} ${VERSION}" \
+              --notes-file release-notes.md
+          fi
+          ASSET_URL="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.assets[] | select(.name=="update-release.json.gz") | .url' | head -n 1)"
+          test -n "$ASSET_URL" || { echo "::error::GitHub release asset REST URL was not returned"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "asset_url=$ASSET_URL" >> "$GITHUB_OUTPUT"
+          echo "GitHub release asset: $ASSET_URL"
+
+      - name: Create Update release in License Master
+        id: master-release
+        env:
+          LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
+          LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ARTIFACT_URL: ${{ steps.github-release.outputs.asset_url }}
+          ARTIFACT_TAG: ${{ steps.github-release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$LICENSE_MASTER_URL" || { echo "::error::Missing LICENSE_MASTER_URL"; exit 1; }
+          test -n "$LICENSE_MASTER_API_TOKEN" || { echo "::error::Missing LICENSE_MASTER_API_TOKEN"; exit 1; }
+          test -n "$ARTIFACT_URL" || { echo "::error::GitHub artifact URL missing"; exit 1; }
+          CHECKSUM="$(sha256sum update-release.json.gz | awk '{print $1}')"
+          VERSION="$VERSION" CHANNEL="$CHANNEL" SOURCE_SHA="$SOURCE_SHA" CHECKSUM="$CHECKSUM" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_REF_NAME="$GITHUB_REF_NAME" GITHUB_RUN_ID="$GITHUB_RUN_ID" ARTIFACT_URL="$ARTIFACT_URL" ARTIFACT_TAG="$ARTIFACT_TAG" node - <<'NODE'
+          const fs=require('fs'),{gunzipSync}=require('node:zlib');
+          const manifest=JSON.parse(gunzipSync(fs.readFileSync('update-release.json.gz')).toString('utf8'));
+          manifest.artifactTag=process.env.ARTIFACT_TAG||null;
+          fs.writeFileSync('release-request.json',JSON.stringify({product:'orbitfs_base',version:process.env.VERSION,channel:process.env.CHANNEL,release_type:'update',source_repo:process.env.GITHUB_REPOSITORY,source_ref:process.env.GITHUB_REF_NAME,source_sha:process.env.SOURCE_SHA,artifact_repo:process.env.GITHUB_REPOSITORY,artifact_name:'update-release.json.gz',artifact_run_id:Number(process.env.GITHUB_RUN_ID),artifact_url:process.env.ARTIFACT_URL,checksum:process.env.CHECKSUM,notes:fs.readFileSync('release-notes.md','utf8'),vercel_ready:false,supabase_ready:false,manifest}));
+          NODE
+          response="$(curl --fail-with-body --silent --show-error -X POST "$LICENSE_MASTER_URL/releases" -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" -H "Content-Type: application/json" --data-binary @release-request.json)"
+          release_id="$(jq -r '.release.id // empty' <<<"$response")"
+          test -n "$release_id" || { echo "::error::License Master did not return a release id"; exit 1; }
+          echo "id=$release_id" >> "$GITHUB_OUTPUT"
+
+      - name: Publish handoff complete
+        run: echo "OrbitFS Update v${{ inputs.version }} is now a draft in License Master and ready for review/validation."
+
+  technical-validation:
+    name: License Master technical validation
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate candidate
+        env:
+          LICENSE_MASTER_URL: ${{ needs.candidate.outputs.license_master_url }}
+          LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
+          RELEASE_ID: ${{ needs.candidate.outputs.release_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_ID"
+          test -n "$LICENSE_MASTER_URL" || { echo "::error::License Manager URL normalization failed"; exit 1; }
+          set +e
+          response="$(curl --silent --show-error -X POST "$LICENSE_MASTER_URL/releases/$RELEASE_ID/validate" -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN")"
+          curl_status=$?
+          set -e
+          if [ $curl_status -ne 0 ]; then
+            echo "::error::License Manager validation request failed."
+            echo "$response"
+            exit $curl_status
+          fi
+          status="$(jq -r '.validation.status // empty' <<<"$response")"
+          if [ "$status" != "passed" ]; then
+            echo "::error::License Manager technical validation failed."
+            jq -r '.validation.checks[]? | select(.ok==false) | "[" + (.key//"check") + "] " + (.message//"Validation failed")' <<<"$response" || echo "$response"
+            exit 1
+          fi
+          echo "License Manager validation passed."
+
+      - name: Review handoff ready
+        run: echo "License Master validation completed. Technical approval remains a manual License Manager control-plane action before Billing Store final review."
