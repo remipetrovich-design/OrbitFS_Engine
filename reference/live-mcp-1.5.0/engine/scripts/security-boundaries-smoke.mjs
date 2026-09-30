@@ -1,0 +1,30 @@
+﻿import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { TOOL_SECURITY, requireToolAuthorization, securitySchemesForTool } from '../src/tools/tool-security.js';
+
+assert.ok(Object.keys(TOOL_SECURITY).length >= 57, 'Tool security registry unexpectedly shrank');
+assert.deepEqual(securitySchemesForTool('read_file'), [{ type:'oauth2', scopes:['orbitfs:read'] }]);
+assert.deepEqual(securitySchemesForTool('write_file'), [{ type:'oauth2', scopes:['orbitfs:write'] }]);
+assert.deepEqual(securitySchemesForTool('load_file'), [{ type:'oauth2', scopes:['orbitfs:read','orbitfs:write'] }]);
+const challenge=(scopes, code)=>`Bearer scope="${scopes.join(' ')}", error="${code}"`;
+assert.throws(()=>requireToolAuthorization({scopes:['orbitfs:read'],clientPermissions:{write:true}},'write_file',challenge),e=>e.code==='OAUTH_INSUFFICIENT_SCOPE'&&e.requiredScopes.includes('orbitfs:write')&&/insufficient_scope/.test(e.wwwAuthenticate));
+assert.doesNotThrow(()=>requireToolAuthorization({scopes:['orbitfs:read'],clientPermissions:{write:false}},'read_file',challenge));
+assert.throws(()=>requireToolAuthorization({scopes:['orbitfs:write'],clientPermissions:{write:false}},'write_file',challenge),e=>e.code==='CLIENT_WRITE_DISABLED');
+assert.throws(()=>requireToolAuthorization({scopes:['orbitfs:read'],clientPermissions:{write:true}},'load_file',challenge),e=>e.code==='OAUTH_INSUFFICIENT_SCOPE');
+
+const root=await fs.mkdtemp(path.join(os.tmpdir(),'orbitfs-file-perms-'));
+const backend=path.join(root,'panel-backend');
+await fs.mkdir(path.join(backend,'data'),{recursive:true});
+const state={users:[{id:'u1',username:'user1',role:'user'}],workspaces:[{id:'ws',name:'Test',owner_id:'owner',owner_username:'owner'}],members:{ws:[{user_id:'u1',username:'user1',permission:'viewer'}]},permissionOverrides:{ws:[{role:'viewer',path:'secret',permissions:{read:false}},{role:'viewer',path:'public',permissions:{read:true}}]}};
+await fs.writeFile(path.join(backend,'data','state.json'),JSON.stringify(state));
+process.env.ORBITFS_BACKEND_ROOT=backend;
+const { requireFilePermission }=await import('../src/services/file-permission-service.js?smoke='+Date.now());
+const identity={userId:'u1',username:'user1'};
+await assert.rejects(()=>requireFilePermission(identity,'ws','secret/file.txt','read'),e=>e.code==='FILE_PERMISSION_DENIED');
+await assert.doesNotReject(()=>requireFilePermission(identity,'ws','public/file.txt','read'));
+await assert.rejects(()=>requireFilePermission(identity,'ws','public/file.txt','write'),e=>e.code==='FILE_PERMISSION_DENIED');
+await assert.rejects(()=>requireFilePermission(identity,'missing','x','read'),e=>e.code==='WORKSPACE_NOT_FOUND');
+await fs.rm(root,{recursive:true,force:true});
+console.log('security-boundaries smoke: OAuth scopes/client-write/file overrides passed');
