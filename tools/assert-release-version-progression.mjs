@@ -13,10 +13,15 @@ const published=(Array.isArray(payload.releases)?payload.releases:[])
   .filter((release)=>release?.status==='published'&&release?.review_status==='approved'&&isOrbitReleaseVersion(release?.version))
   .map((release)=>String(release.version))
   .filter((candidate)=>orbitReleaseVersionFamily(candidate)===family);
+
+let sameVersion=false;
 for(const previous of published){
   const comparison=compareOrbitReleaseVersions(version,previous);
-  if(comparison!==null&&comparison<=0){
-    throw new Error('Release version '+version+' must advance beyond published '+previous);
+  if(comparison!==null&&comparison<0){
+    throw new Error('Release version '+version+' must not be lower than published '+previous);
   }
+  if(comparison===0)sameVersion=true;
 }
-console.log('Release version progression accepted: '+version);
+console.log(sameVersion
+  ? 'Same-version repackage accepted: '+version
+  : 'Release version progression accepted: '+version);

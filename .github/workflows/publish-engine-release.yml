@@ -202,7 +202,7 @@ jobs:
           test -n "$LICENSE_MASTER_API_TOKEN" || { echo "::error::Missing LICENSE_MASTER_API_TOKEN"; exit 1; }
           response="$(curl --fail-with-body --silent --show-error -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" "$LICENSE_MASTER_URL/releases?product=orbitfs_base&channel=$CHANNEL&type=update")"
           printf '%s' "$response" | VERSION="$VERSION" node tools/assert-release-version-progression.mjs
-          echo "Version $VERSION advances beyond the current published $CHANNEL release."
+          echo "Version $VERSION is valid against the current published $CHANNEL release. Equal version means a same-version package revision; lower versions remain blocked."
       - name: Generate Engine update changelog
         shell: bash
         env:
@@ -295,10 +295,13 @@ jobs:
           base_id="$(jq -r '.id' <<<"$selection")"
           compatible_version="$(jq -r '.version' <<<"$selection")"
           base_source="$(jq -r '.source' <<<"$selection")"
+          base_schema_version="$(jq -r '.databaseSchemaVersion // empty' <<<"$selection")"
+          [[ "$base_schema_version" =~ ^[0-9]+$ ]] && [ "$base_schema_version" -gt 0 ] || { echo "::error::Compatible Base release is missing databaseSchemaVersion."; exit 1; }
           echo "id=$base_id" >> "$GITHUB_OUTPUT"
           echo "version=$compatible_version" >> "$GITHUB_OUTPUT"
           echo "minimum_version=$MINIMUM_BASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "source=$base_source" >> "$GITHUB_OUTPUT"
+          echo "schema_version=$base_schema_version" >> "$GITHUB_OUTPUT"
 
           echo "Base compatibility validated: minimum $MINIMUM_BASE_VERSION; compatible published Base $compatible_version ($base_id) from $BASE_CHANNEL"
 
@@ -399,6 +402,45 @@ jobs:
         shell: bash
         run: echo "sha256=$(sha256sum update-release.json.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
+      - name: Register Engine database package candidates
+        id: database-packages
+        env:
+          LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
+          LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          COMPONENTS: ${{ steps.affected.outputs.components }}
+          MINIMUM_BASE_VERSION: ${{ inputs.minimum_base_version }}
+          MINIMUM_BASE_SCHEMA_VERSION: ${{ steps.base-compatibility.outputs.schema_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$LICENSE_MASTER_API_TOKEN" || { echo "::error::Missing LICENSE_MASTER_API_TOKEN"; exit 1; }
+          refs='[]'
+          targets="engine-shared,$COMPONENTS"
+          IFS=',' read -ra parts <<< "$targets"
+          for component in "${parts[@]}"; do
+            component="$(echo "$component" | xargs)"
+            [ -n "$component" ] || continue
+            package_file="/tmp/database-package-$component.json"
+            node tools/build-database-package.mjs \
+              --component "$component" \
+              --commit "$SOURCE_SHA" \
+              --minimum-base-version "$MINIMUM_BASE_VERSION" \
+              --minimum-base-schema-version "$MINIMUM_BASE_SCHEMA_VERSION" \
+              --output "$package_file"
+            response="$(curl --fail-with-body --silent --show-error -X POST "$LICENSE_MASTER_URL/database-packages" \
+              -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data-binary @"$package_file")"
+            reference="$(jq -c '{id:.package.id,component:.package.component,databaseSchemaVersion:.package.databaseSchemaVersion,sha256:.package.sha256,sourceCommit:.package.sourceCommit}' <<<"$response")"
+            refs="$(jq -c --argjson item "$reference" '. + [$item]' <<<"$refs")"
+          done
+          component_count="$(tr ',' '\n' <<<"$COMPONENTS" | sed '/^$/d' | wc -l | xargs)"
+          expected_count="$((1 + component_count))"
+          actual_count="$(jq 'length' <<<"$refs")"
+          [ "$actual_count" -eq "$expected_count" ] || { echo "::error::Database package reference count mismatch."; exit 1; }
+          echo "references=$refs" >> "$GITHUB_OUTPUT"
+
       - name: Publish Update Bundle to GitHub Release
         id: github-release
         env:
@@ -435,6 +477,7 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha }}
           ARTIFACT_URL: ${{ steps.github-release.outputs.asset_url }}
           ARTIFACT_TAG: ${{ steps.github-release.outputs.tag }}
+          DATABASE_PACKAGE_REFERENCES: ${{ steps.database-packages.outputs.references }}
         shell: bash
         run: |
           set -euo pipefail
@@ -446,6 +489,7 @@ jobs:
           const fs=require('fs'),{gunzipSync}=require('node:zlib');
           const manifest=JSON.parse(gunzipSync(fs.readFileSync('update-release.json.gz')).toString('utf8'));
           manifest.artifactTag=process.env.ARTIFACT_TAG||null;
+          manifest.databasePackages={format:'orbitfs-database-package-set-v1',packages:JSON.parse(process.env.DATABASE_PACKAGE_REFERENCES||'[]')};
           fs.writeFileSync('release-request.json',JSON.stringify({product:'orbitfs_base',version:process.env.VERSION,channel:process.env.CHANNEL,release_type:'update',source_repo:process.env.GITHUB_REPOSITORY,source_ref:process.env.GITHUB_REF_NAME,source_sha:process.env.SOURCE_SHA,artifact_repo:process.env.GITHUB_REPOSITORY,artifact_name:'update-release.json.gz',artifact_run_id:Number(process.env.GITHUB_RUN_ID),artifact_url:process.env.ARTIFACT_URL,checksum:process.env.CHECKSUM,notes:fs.readFileSync('release-notes.md','utf8'),vercel_ready:false,supabase_ready:false,manifest}));
           NODE
           response="$(curl --fail-with-body --silent --show-error -X POST "$LICENSE_MASTER_URL/releases" -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" -H "Content-Type: application/json" --data-binary @release-request.json)"
@@ -490,4 +534,4 @@ jobs:
           echo "License Manager validation passed."
 
       - name: Review handoff ready
-        run: echo "License Master validation completed. Technical approval remains a manual License Manager control-plane action before Billing Store final review."
+        run: echo "License Manager validation completed. When Auto technical approval is enabled, the exact validated candidate is approved automatically for Billing Store final review. Publication remains a separate Billing Store action."

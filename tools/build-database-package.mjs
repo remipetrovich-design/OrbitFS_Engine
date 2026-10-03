@@ -8,7 +8,7 @@ const arg=(name,fallback='')=>{const i=args.indexOf('--'+name);return i>=0?Strin
 const requested=arg('component').trim().toLowerCase();
 const sourceCommit=arg('commit',process.env.GITHUB_SHA||'').trim().toLowerCase();
 const minimumBaseVersion=arg('minimum-base-version',process.env.ORBITFS_MINIMUM_BASE_VERSION||'1.0.0').trim()||null;
-const minimumBaseSchemaRaw=arg('minimum-base-schema-version',process.env.ORBITFS_MINIMUM_BASE_SCHEMA_VERSION||'1').trim();
+const minimumBaseSchemaRaw=arg('minimum-base-schema-version',process.env.ORBITFS_MINIMUM_BASE_SCHEMA_VERSION||'2').trim();
 const output=resolve(ROOT,arg('output',requested?'database-package-'+requested+'.json':'database-package.json'));
 
 const mapping={

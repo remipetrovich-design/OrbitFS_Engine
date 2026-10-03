@@ -2,12 +2,33 @@ import { getSupabaseAdmin } from '$lib/server/supabase';
 import { getAddonEngineState, type EngineSetupState } from '$lib/server/addon-engine';
 import { componentLicensed, getPanelLicenseSummary } from '$lib/server/license';
 import { getSharedEngineHostState } from '$lib/server/shared-engine-host';
+import { mcpAddonManifest } from '../../addons/mcp/manifest';
+import { apexAddonManifest } from '../../addons/apex/manifest';
+import { studioAddonManifest } from '../../addons/studio/manifest';
 
-export const ENGINE_CATALOG = [
-	{ id: 'mcp', name: 'MCP', fullName: 'OrbitFS MCP', description: 'Context, tools, OAuth and MCP client runtime.', component: 'orbitfs_mcp', version: '1.5.0', transportPath: '/mcp' },
-	{ id: 'apex', name: 'APEX', fullName: 'OrbitFS APEX', description: 'Knowledge ingest, routing, processing and conversion engine.', component: 'orbitfs_apex', version: '2.0.0', transportPath: null },
-	{ id: 'studio', name: 'Studio', fullName: 'OrbitFS Studio', description: 'Studio processing and analysis runtime.', component: 'orbitfs_studio', version: '', transportPath: null }
-] as const;
+const ENGINE_MANIFESTS = [mcpAddonManifest, apexAddonManifest, studioAddonManifest] as const;
+
+export const ENGINE_CATALOG = ENGINE_MANIFESTS.map((manifest) => ({
+	id: manifest.id,
+	name: manifest.id === 'mcp' ? 'MCP' : manifest.id === 'apex' ? 'APEX' : 'Studio',
+	fullName: manifest.name,
+	description: manifest.description,
+	component: manifest.licenseComponent,
+	version: manifest.version,
+	transportPath: manifest.transportPath,
+	sourceRef: manifest.sourceRef,
+	manifest
+})) as ReadonlyArray<{
+	id:string;
+	name:string;
+	fullName:string;
+	description:string;
+	component:string;
+	version:string;
+	transportPath:string|null;
+	sourceRef:string;
+	manifest:any;
+}>;
 
 let builtinRecordsCheckedAt = 0;
 const BUILTIN_CHECK_TTL_MS = 5 * 60 * 1000;
@@ -57,13 +78,31 @@ export async function ensureBuiltinEngineRecords(force = false) {
 			status:'registered',
 			deployment_url:null,
 			transport_path:engine.transportPath,
+			source_ref:engine.sourceRef,
 			config:{},
-			manifest:{id:engine.id,name:engine.fullName,description:engine.description,version:engine.version,licenseComponent:engine.component,runtimeMode:'engine-host',transportPath:engine.transportPath,database:{mode:'shared-panel',provider:'supabase',owner:'panel',isolated:false}},
+			manifest:engine.manifest,
 			runtime:{mode:'engine-host',engineMode:engine.id==='mcp'?'running':'standby',setupState:'not_started',compute:'vercel',database:'shared-panel',online:false},
 			installed_at:null
 		}));
 		const result=await db.from('orbitfs_addons').upsert(rows,{onConflict:'id',ignoreDuplicates:true});
 		if(result.error)throw result.error;
+	}
+
+	// Engine owns the add-on manifest. Reconcile only catalog/manifest fields on
+	// existing rows so Panel never becomes the source of truth for Engine UI.
+	for(const engine of ENGINE_CATALOG){
+		const reconciled=await db.from('orbitfs_addons').update({
+			name:engine.fullName,
+			description:engine.description,
+			version:engine.version,
+			license_component:engine.component,
+			available:true,
+			transport_path:engine.transportPath,
+			source_ref:engine.sourceRef,
+			manifest:engine.manifest,
+			updated_at:new Date().toISOString()
+		}).eq('id',engine.id);
+		if(reconciled.error)throw reconciled.error;
 	}
 	builtinRecordsCheckedAt = Date.now();
 }

@@ -3,10 +3,14 @@ import { env } from '$env/dynamic/private';
 import { getSupabaseAdmin } from '$lib/server/supabase';
 import { componentLicensed, ensureInstallationIdentity, getPanelLicenseSummary } from '$lib/server/license';
 import { assertSharedEngineHostLinked, getSharedEngineHostState } from '$lib/server/shared-engine-host';
+import { mcpAddonManifest } from '../../addons/mcp/manifest';
+import { apexAddonManifest } from '../../addons/apex/manifest';
+import { studioAddonManifest } from '../../addons/studio/manifest';
 
 export type EngineSetupState = 'not_started' | 'required' | 'in_progress' | 'complete' | 'error';
 
 const COMPONENTS: Record<string, string> = { mcp: 'orbitfs_mcp', apex: 'orbitfs_apex', studio: 'orbitfs_studio' };
+const ENGINE_MANIFESTS:Record<string,any>={mcp:mcpAddonManifest,apex:apexAddonManifest,studio:studioAddonManifest};
 
 function safeEqual(a: string, b: string) {
 	const aa = Buffer.from(a);
@@ -41,7 +45,7 @@ function normalizeEngineId(value: unknown) {
 
 async function getEngineRow(engineId: string) {
 	const db = getSupabaseAdmin();
-	const { data, error } = await db.from('orbitfs_addons').select('id,name,installed,attached,configured,available,license_component,config,runtime,updated_at').eq('id', engineId).maybeSingle();
+	const { data, error } = await db.from('orbitfs_addons').select('id,name,installed,attached,configured,available,license_component,config,runtime,installed_at,updated_at').eq('id', engineId).maybeSingle();
 	if (error) throw error;
 	if (!data) throw Object.assign(new Error('Unknown engine'), { status: 404, code: 'ENGINE_NOT_FOUND' });
 	return data as any;
@@ -117,7 +121,8 @@ export async function pairEngineHost(input: Record<string, any>) {
 	const host = await assertSharedEngineHostLinked();
 	const engineId = normalizeEngineId(input.engineId || input.engine_id);
 	const row = await getEngineRow(engineId);
-	if (row.installed !== true) throw Object.assign(new Error(`OrbitFS ${engineId} must be installed from Panel before it can be attached`), { status: 409, code: 'ENGINE_NOT_INSTALLED' });
+	const pendingInstall=objectValue(row.runtime).pendingInstall===true;
+	if (row.installed !== true && !pendingInstall) throw Object.assign(new Error(`OrbitFS ${engineId} must be installed or have a signed pending install from Panel before it can be attached`), { status: 409, code: 'ENGINE_NOT_INSTALLED' });
 	const installationId = String(input.installationId || input.installation_id || '').trim();
 	const canonicalInstallationId = await ensureInstallationIdentity();
 	if (!installationId || installationId !== canonicalInstallationId || host.installationId !== canonicalInstallationId) {
@@ -181,6 +186,9 @@ export async function pairEngineHost(input: Record<string, any>) {
 	};
 	const nextRuntime = {
 		...runtime,
+		pendingInstall:false,
+		desiredInstalled:true,
+		installCompletedAt: pendingInstall ? stamp : (runtime.installCompletedAt || null),
 		engineHostLinked: true,
 		panelUrl: host.panelUrl,
 		hostUrl: host.hostUrl,
@@ -195,7 +203,19 @@ export async function pairEngineHost(input: Record<string, any>) {
 		online: automaticMcp ? true : runtime.online === true,
 		engineMode: engineId === 'mcp' ? 'running' : engineModeFor(engineId,runtime)
 	};
+	const authoritativeManifest=ENGINE_MANIFESTS[engineId]||null;
 	const { error } = await db.from('orbitfs_addons').update({
+		...(authoritativeManifest?{
+			name:authoritativeManifest.name,
+			description:authoritativeManifest.description,
+			version:authoritativeManifest.version,
+			license_component:authoritativeManifest.licenseComponent,
+			transport_path:authoritativeManifest.transportPath,
+			source_ref:authoritativeManifest.sourceRef,
+			manifest:authoritativeManifest
+		}:{}),
+		installed: true,
+		installed_at: row.installed_at || stamp,
 		attached: true,
 		configured: setupState === 'complete',
 		status: 'attached',

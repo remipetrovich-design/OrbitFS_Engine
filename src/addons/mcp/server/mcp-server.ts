@@ -7,6 +7,7 @@ import widgetHtml from '../ui/widget.html?raw';
 import studioWidgetHtml from '../ui/studio-widget.html?raw';
 import { authenticateMcpAccessToken } from '$lib/server/mcp-oauth';
 import { assertMcpLicensed } from '$lib/server/mcp-cloud';
+import { componentLicensed, getPanelLicenseSummary } from '$lib/server/license';
 import { getStartup, getPresets, getPresetMetadata, getPresetBundles, listMcpProjects, projectBundleAssignments, listContextBundles } from '$lib/server/mcp-workspace-state';
 import { getSupabaseAdmin } from '$lib/server/supabase';
 import {
@@ -47,6 +48,13 @@ const textResult=(message:string,data:any={},meta:any={})=>({content:[{type:'tex
 const contentResult=(content:string,data:any={},meta:any={})=>({content:[{type:'text' as const,text:content}],structuredContent:{ok:true,...data},_meta:{...meta,orbitfsUiState:data}});
 const asError=(error:any)=>({content:[{type:'text' as const,text:String(error?.message||error||'OrbitFS request failed')}],isError:true});
 const requireAdmin=(identity:any)=>{if(!['owner','admin'].includes(String(identity.role||'').toLowerCase()))throw Object.assign(new Error('System Owner or Admin required'),{status:403,code:'SYSTEM_ROLE_REQUIRED'});};
+async function assertStudioLicensed(){
+  const summary=await getPanelLicenseSummary();
+  const component=summary.components?.orbitfs_studio||{};
+  if(summary.licensed!==true||!componentLicensed(component)){
+    throw Object.assign(new Error(String(component?.reason||'OrbitFS Studio licence is required')),{status:403,code:'STUDIO_LICENSE_REQUIRED'});
+  }
+}
 
 function registerResources(server:McpServer){
   const home='ui://orbitfs/home-v8.html', studio='ui://orbitfs/studio-v8.html';
@@ -137,7 +145,7 @@ function createServer(identity:any){
   const ro={readOnlyHint:true,idempotentHint:true,destructiveHint:false,openWorldHint:false};
   const rw={readOnlyHint:false,idempotentHint:false,destructiveHint:false,openWorldHint:false};
   const destructive={readOnlyHint:false,idempotentHint:false,destructiveHint:true,openWorldHint:false};
-  const reg=(name:string,title:string,description:string,inputSchema:any,handler:any,annotations:any=ro,meta:any={})=>server.registerTool(name,{title,description,inputSchema,outputSchema,annotations,_meta:meta},async(args:any)=>{try{return await handler(args);}catch(e){return asError(e);}});
+  const reg=(name:string,title:string,description:string,inputSchema:any,handler:any,annotations:any=ro,meta:any={})=>server.registerTool(name,{title,description,inputSchema,outputSchema,annotations,_meta:meta},async(args:any)=>{try{if(name.startsWith('studio_'))await assertStudioLicensed();return await handler(args);}catch(e){return asError(e);}});
   reg('workspace','Current OrbitFS workspace','Show the currently selected OrbitFS workspace.',{},async()=>{const p=await chooseWorkspace(identity);return textResult(`Workspace: ${p.workspace.name}`,{workspaceId:p.workspace.id,workspaceName:p.workspace.name});});
   reg('loadworkspace','Load OrbitFS workspace','Switch the current OrbitFS workspace by name, id, or visible workspace number.',{name:z.string().min(1)},async({name}:any)=>{const p:any=await chooseWorkspace(identity,name);if(p.matches)return textResult(p.matches.map((w:any,i:number)=>`${i+1}. ${w.name}`).join('\n'),{matches:p.matches.map((w:any)=>({id:w.id,name:w.name}))});return textResult(`Workspace loaded: ${p.workspace.name}`,{workspaceId:p.workspace.id,workspaceName:p.workspace.name});},rw);
   registerAppTool(server,'orbitfs',{title:'Open OrbitFS',description:'Open the OrbitFS embedded UI. Only call when the user explicitly asks to open OrbitFS.',inputSchema:{workspaceId:z.string().optional(),strength:z.enum(['low','medium','high','custom1','custom2']).optional(),projectId:z.string().optional()},annotations:ro,_meta:homeMeta},async({workspaceId,strength,projectId}:any)=>({content:[{type:'text',text:'OrbitFS opened.'}],structuredContent:{ok:true,message:'OrbitFS opened.'},_meta:{...homeMeta,orbitfsUiState:await uiState(identity,workspaceId,strength,projectId)}}));

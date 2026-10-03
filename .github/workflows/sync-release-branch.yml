@@ -118,3 +118,4 @@ jobs:
             exit 1
           }
           echo "$RELEASE_BRANCH now points to validated main $TARGET_SHA with identical database migrations."
+

@@ -20,6 +20,15 @@ function databaseSnapshotSha(release) {
   ).toLowerCase();
 }
 
+function databaseSchemaVersion(release) {
+  const manifest = objectValue(release?.manifest);
+  const releaseInfo = objectValue(manifest.releaseInfo);
+  const database = objectValue(manifest.database);
+  const raw = manifest.databaseSchemaVersion || releaseInfo.databaseSchemaVersion || database.schemaVersion || null;
+  const numeric = Number(raw);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
 function publishedAt(release) {
   const value = Date.parse(clean(release?.published_at || release?.created_at));
   return Number.isFinite(value) ? value : 0;
@@ -86,7 +95,8 @@ export function selectCompatibleBaseRelease(payload, input = {}) {
     channel: clean(selected.channel || channel).toLowerCase(),
     minimumBaseVersion,
     compatibility: 'at_or_above_minimum',
-    databaseSchemaSha256: databaseSnapshotSha(selected)
+    databaseSchemaSha256: databaseSnapshotSha(selected),
+    databaseSchemaVersion: databaseSchemaVersion(selected)
   };
 }
 

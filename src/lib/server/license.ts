@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { env } from '$env/dynamic/private';
 import { getSupabaseAdmin } from '$lib/server/supabase';
 
@@ -17,6 +17,35 @@ const timeoutMs=()=>Math.max(1000,Number(env.ORBITFS_LICENSE_TIMEOUT_MS||8000));
 function identityMetadata(installationId:string,extra:Record<string,any>={}){let supabaseProjectRef:string|null=null;try{supabaseProjectRef=new URL(String(env.SUPABASE_URL||"")).hostname.split(".")[0]||null}catch{}return{installationId,product:"orbitfs_base",appVersion:String(env.ORBITFS_BASE_VERSION||env.ORBITFS_APP_VERSION||"unknown"),panelUrl:String(env.ORBITFS_PANEL_URL||""),deploymentUrl:String(env.VERCEL_URL||""),vercelEnvironment:String(env.VERCEL_ENV||"production"),vercelRegion:String(env.VERCEL_REGION||""),supabaseProjectRef,...extra};}
 const keyHint=(k:string)=>k.length>4?`****${k.slice(-4)}`:'****';
 let rowCache:{value:LicenseRow|null;expires:number}|null=null;let summaryCache:{value:PanelLicenseSummary;expires:number}|null=null;
+async function baseLicenseSummary(refresh=false):Promise<PanelLicenseSummary>{
+  if(!refresh&&summaryCache&&summaryCache.expires>Date.now())return summaryCache.value;
+  const panelUrl=String(env.ORBITFS_PANEL_URL||'').trim().replace(/\/+$/,'');
+  const secret=String(env.ORBITFS_ENGINE_SECRET||'').trim();
+  const installationId=String(env.ORBITFS_INSTALLATION_ID||'').trim();
+  if(!panelUrl||!secret||!installationId)throw Object.assign(new Error('Engine licence bridge to Base is not configured.'),{status:503,code:'BASE_LICENSE_BRIDGE_NOT_CONFIGURED'});
+  const timestamp=String(Math.floor(Date.now()/1000));
+  const signature=createHmac('sha256',secret).update(`${timestamp}.`).digest('hex');
+  const url=new URL('/api/engine-license',panelUrl);
+  if(refresh)url.searchParams.set('refresh','1');
+  const response=await fetch(url,{
+    method:'GET',
+    headers:{
+      accept:'application/json',
+      'x-orbitfs-engine-secret':secret,
+      'x-orbitfs-installation-id':installationId,
+      'x-orbitfs-timestamp':timestamp,
+      'x-orbitfs-signature':signature
+    },
+    cache:'no-store',
+    signal:AbortSignal.timeout(timeoutMs())
+  });
+  const body:any=await response.json().catch(()=>({}));
+  if(!response.ok||body?.ok!==true||!body?.summary)throw Object.assign(new Error(String(body?.error||'Base licence status unavailable')),{status:response.status||503,code:String(body?.code||'BASE_LICENSE_STATUS_FAILED')});
+  const summary=body.summary as PanelLicenseSummary;
+  if(String(summary.installationId||'')!==installationId)throw Object.assign(new Error('Base licence status belongs to a different installation.'),{status:409,code:'INSTALLATION_ID_MISMATCH'});
+  summaryCache={value:summary,expires:Date.now()+SUMMARY_CACHE_MS};
+  return summary;
+}
 function normalizeProviderBase(value:string){
   const raw=String(value||'').trim().replace(/\/+$/,'');
   if(!raw)throw Object.assign(new Error('OrbitFS licence API URL is not configured'),{code:'LICENSE_MASTER_URL_MISSING',status:503});
@@ -307,84 +336,7 @@ function makeSummary(row:LicenseRow|null,valid:boolean,reason:string|null,extra:
     licensedTo:row?.licensed_to||null,expiresAt:row?.expires_at||null,...extra};
 }
 export async function getPanelLicenseSummary(options:{refresh?:boolean}={}):Promise<PanelLicenseSummary>{
-  if(!options.refresh&&summaryCache&&summaryCache.expires>Date.now())return summaryCache.value;
-  const row=await getRow(Boolean(options.refresh));const i=await installation(row);let current=i.row||row;
-  if(!current?.license_key){
-    const out=makeSummary(current,false,'not_activated');summaryCache={value:out,expires:Date.now()+SUMMARY_CACHE_MS};return out;
-  }
-
-  let pulseChanged=false;
-  if(!options.refresh){
-    const pulse=await pollPulse(current,i.id);
-    current=pulse.row;pulseChanged=pulse.changed;
-  }
-
-  const activeLicenseKey=String(current.license_key||'').trim();
-  if(!activeLicenseKey){
-    const out=makeSummary(current,false,'not_activated');summaryCache={value:out,expires:Date.now()+SUMMARY_CACHE_MS};return out;
-  }
-
-  let m={...(current.metadata||{})},policy=metadataPolicy(m);
-  const checked=typeof m.lastCheckedAt==='string'?m.lastCheckedAt:null;
-  const ttlUntil=deadline(checked,policy.validationTtlSeconds);
-  const expiresAt=current.expires_at?Date.parse(current.expires_at):NaN;
-  const locallyExpired=Number.isFinite(expiresAt)&&Date.now()>=expiresAt;
-  const denied=knownDenied(m);
-  const ttlValid=ttlUntil!==null&&Date.now()<ttlUntil&&!locallyExpired&&current.status==='active'&&policy.lastAuthoritativeValid&&!denied;
-  let mustValidate=Boolean(options.refresh||pulseChanged||policy.pulseValidationRequired||locallyExpired||(!denied&&!ttlValid));
-
-  if(mustValidate&&!options.refresh&&!locallyExpired&&policy.failedValidationCount>0){
-    const retryMs=policy.pulsePollSeconds===null?0:policy.pulsePollSeconds*1000;
-    const lastAttempt=policy.lastValidationAttemptAt?Date.parse(policy.lastValidationAttemptAt):NaN;
-    if(retryMs>0&&Number.isFinite(lastAttempt)&&Date.now()-lastAttempt<retryMs)mustValidate=false;
-  }
-
-  if(!mustValidate){
-    if(denied){
-      const out=makeSummary(current,false,String(m.pendingPulseAuthorityState||m.lastAuthorityState||current.status||'LICENSE_INVALID'));
-      summaryCache={value:out,expires:Date.now()+SUMMARY_CACHE_MS};return out;
-    }
-    if(ttlValid){const out=makeSummary(current,true,null);summaryCache={value:out,expires:Date.now()+SUMMARY_CACHE_MS};return out;}
-    const graceUntil=ttlUntil===null||policy.offlineGraceSeconds===null?null:ttlUntil+policy.offlineGraceSeconds*1000;
-    const failureBudgetOk=policy.maxFailedValidations===null?true:policy.failedValidationCount<=policy.maxFailedValidations;
-    const mayGrace=policy.allowOfflineGrace&&policy.lastAuthoritativeValid&&!knownDenied(m)&&!locallyExpired&&failureBudgetOk&&graceUntil!==null&&Date.now()<graceUntil;
-    const out=makeSummary(current,mayGrace,mayGrace?null:'LICENSE_MASTER_UNAVAILABLE',{offlineGrace:mayGrace});
-    summaryCache={value:out,expires:Date.now()+SUMMARY_CACHE_MS};return out;
-  }
-
-  const pendingDirectives=policy.pendingPulseDirectives;
-  try{
-    const result=await masterRequest('/validate',{method:'POST',body:JSON.stringify({
-      action:'validate',license_key:activeLicenseKey,product:'orbitfs_base',component:PANEL_COMPONENT,installation_id:i.id,
-      product_version:env.ORBITFS_APP_VERSION||'cloud',metadata:identityMetadata(i.id)
-    })});
-    const saved=await saveValidationResult(current,i.id,result,activeLicenseKey);
-    const valid=resultValid(result);
-    const reason=valid?null:String(authorityState(result)||result?.code||'LICENSE_INVALID');
-    if(valid&&pendingDirectives.some((directive)=>directive.action==='request_check_in')){
-      await recordLicenseManagerCheckIn({action:'check_in',phase:'completed',product:'orbitfs_base',productVersion:env.ORBITFS_APP_VERSION||'cloud',client:'orbitfs-engine',clientVersion:env.ORBITFS_APP_VERSION||null,details:{source:'license-pulse'}});
-    }
-    await acknowledgePulseDirectives(saved,i.id,pendingDirectives,'applied',String(result?.code||'LICENSE_VALID'),valid?'active':reason);
-    const out=makeSummary(saved,valid,reason);summaryCache={value:out,expires:Date.now()+SUMMARY_CACHE_MS};return out;
-  }catch(error:any){
-    if(isAuthoritativeHttpError(error)){
-      const state=authorityStateFromError(error),now=new Date().toISOString();
-      const saved=await saveRow({status:state,metadata:{...(current.metadata||{}),lastCheckedAt:now,lastRevisionCheckedAt:now,lastAuthorityState:state,lastAuthoritativeValid:false,failedValidationCount:0,lastValidationAttemptAt:now,pulseRevision:policy.pendingPulseRevision??policy.pulseRevision,pulseValidationRequired:false,pendingPulseRevision:null,pendingPulseAuthorityState:null,pendingPulseDirectives:[]}},current);
-      await acknowledgePulseDirectives(saved,i.id,pendingDirectives,'applied',state,state);
-      const out=makeSummary(saved,false,state,{offlineGrace:false,refreshError:String(error?.message||state)});
-      summaryCache={value:out,expires:Date.now()+SUMMARY_CACHE_MS};return out;
-    }
-    const failed=await saveTransportFailure(current);
-    m={...(failed.metadata||{})};policy=metadataPolicy(m);
-    const baseDeadline=deadline(typeof m.lastCheckedAt==='string'?m.lastCheckedAt:null,policy.validationTtlSeconds);
-    const graceUntil=baseDeadline===null||policy.offlineGraceSeconds===null?null:baseDeadline+policy.offlineGraceSeconds*1000;
-    const failureBudgetOk=policy.maxFailedValidations===null?true:policy.failedValidationCount<=policy.maxFailedValidations;
-    const mayGrace=policy.allowOfflineGrace&&policy.lastAuthoritativeValid&&!knownDenied(m)&&!locallyExpired&&failureBudgetOk&&graceUntil!==null&&Date.now()<graceUntil;
-    const code=String(error?.code||'LICENSE_MASTER_UNAVAILABLE'),detail=String(error?.message||'License Master unavailable');
-    await acknowledgePulseDirectives(failed,i.id,pendingDirectives,'failed',code,mayGrace?'offline_grace':'unavailable',detail);
-    const out=makeSummary(failed,mayGrace,mayGrace?null:code,{offlineGrace:mayGrace,refreshError:detail});
-    summaryCache={value:out,expires:Date.now()+SUMMARY_CACHE_MS};return out;
-  }
+  return baseLicenseSummary(Boolean(options.refresh));
 }
 
 export async function activatePanelLicense(licenseKey:string){
@@ -470,11 +422,12 @@ export async function recordLicenseManagerCheckIn(input:{
 }) {
   const row=await getRow(true);
   const identity=await installation(row);
+  const licenseKey=String(row?.license_key||'').trim();
   const licenseId=String(row?.metadata?.masterLicenseId||'').trim();
-  if(!licenseId)return {ok:false,skipped:true,reason:'MASTER_LICENSE_ID_NOT_CACHED'};
+  if(!licenseKey)return {ok:false,skipped:true,reason:'LICENSE_KEY_NOT_CONFIGURED'};
   try {
     return await masterRequest('/validate',{method:'POST',body:JSON.stringify({action:'check_in',
-      license_id:licenseId,installation_id:identity.id,deployment_action:input.action,phase:input.phase,
+      license_key:licenseKey,...(licenseId?{license_id:licenseId}:{}),installation_id:identity.id,deployment_action:input.action,phase:input.phase,
       product:input.product||PANEL_COMPONENT,product_version:input.productVersion||env.ORBITFS_APP_VERSION||'unknown',
       previous_version:input.previousVersion||null,release_id:input.releaseId||null,deployment_id:input.deploymentId||null,
       deployment_url:input.deploymentUrl||env.VERCEL_URL||null,project_id:input.projectId||null,project_name:input.projectName||null,
