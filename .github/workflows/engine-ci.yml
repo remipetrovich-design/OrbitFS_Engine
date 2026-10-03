@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Active/passive GitHub profile guard is enforced before validation.
+  # Active/passive GitHub profile guard is enforced before validation; fallback is currently the active source.
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 25
