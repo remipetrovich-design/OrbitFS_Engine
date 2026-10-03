@@ -71,7 +71,26 @@ jobs:
       license_master_url: ${{ steps.license-master.outputs.url }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check active GitHub profile
+        id: profile
+        shell: bash
+        env:
+          EXPECTED_GITHUB_PROFILE: fallback
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error --retry 2 --retry-delay 2 https://dev.incendiarynetworks.cc/api/github-profile)"
+          active="$(node -e 'const x=JSON.parse(process.argv[1]); process.stdout.write(String(x.profile||""))' "$response")"
+          echo "Active GitHub profile: $active"
+          echo "Expected for this repository: $EXPECTED_GITHUB_PROFILE"
+          if [ "$active" != "$EXPECTED_GITHUB_PROFILE" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Inactive GitHub profile. Remaining workflow steps are disabled."
+            exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
       - name: Resolve Engine update components
+        if: steps.profile.outputs.run == 'true'
         id: release
         shell: bash
         run: |
@@ -93,12 +112,14 @@ jobs:
           echo "components=$component_csv" >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact inspected Engine source
+        if: steps.profile.outputs.run == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
 
       - name: Verify UPDATE_RELEASES source identity
+        if: steps.profile.outputs.run == 'true'
         env:
           INSPECTED_SHA: ${{ inputs.source_sha }}
         shell: bash
@@ -109,6 +130,7 @@ jobs:
           test "$(git rev-parse origin/UPDATE_RELEASES)" = "$INSPECTED_SHA" || { echo "::error::UPDATE_RELEASES moved after Dev Panel inspection. Inspect again before building."; exit 1; }
 
       - name: Require release database tree to match current main
+        if: steps.profile.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -123,23 +145,28 @@ jobs:
           echo "Stage 1 Engine database migrations match current main at the inspected UPDATE_RELEASES commit."
 
       - name: Set up Node
+        if: steps.profile.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 24
 
       - name: Install Engine dependencies
+        if: steps.profile.outputs.run == 'true'
         shell: bash
         run: npm ci
 
       - name: Build Engine source
+        if: steps.profile.outputs.run == 'true'
         shell: bash
         run: npm run build
 
       - name: Validate customer database migration history
+        if: steps.profile.outputs.run == 'true'
         shell: bash
         run: npm run db:migrations:check
 
       - name: Normalize License Manager URL
+        if: steps.profile.outputs.run == 'true'
         id: license-master
         env:
           RAW_LICENSE_MASTER_URL: ${{ vars.LICENSE_MASTER_URL || 'https://incendiarynetworks.cc/api/v1' }}
@@ -162,6 +189,7 @@ jobs:
           echo "License Manager API: $normalized"
 
       - name: Validate release channel in License Master
+        if: steps.profile.outputs.run == 'true'
         env:
           LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
           LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
@@ -173,6 +201,7 @@ jobs:
           channels="$(curl --fail-with-body --silent --show-error -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" "$LICENSE_MASTER_URL/release-channels?include_disabled=false")"
           CHANNEL="$CHANNEL" CHANNELS="$channels" node -e 'const c=process.env.CHANNEL,j=JSON.parse(process.env.CHANNELS),ok=(j.channels||[]).some(x=>x.channel===c&&x.enabled===true); if(!ok) throw new Error("Release channel is not configured or is disabled in License Master: "+c);'
       - name: Resolve previous approved Engine source commit
+        if: steps.profile.outputs.run == 'true'
         id: previous
         env:
           LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
@@ -191,6 +220,7 @@ jobs:
           echo "commit=$previous" >> "$GITHUB_OUTPUT"
           if [ -n "$previous" ]; then echo "Previous approved Engine release source: $previous"; else echo "No previous approved Engine source found; creating baseline analysis."; fi
       - name: Reject version rollback against License Master
+        if: steps.profile.outputs.run == 'true'
         env:
           LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
           LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
@@ -204,6 +234,7 @@ jobs:
           printf '%s' "$response" | VERSION="$VERSION" node tools/assert-release-version-progression.mjs
           echo "Version $VERSION is valid against the current published $CHANNEL release. Equal version means a same-version package revision; lower versions remain blocked."
       - name: Generate Engine update changelog
+        if: steps.profile.outputs.run == 'true'
         shell: bash
         env:
           PREVIOUS_COMMIT: ${{ steps.previous.outputs.commit }}
@@ -248,6 +279,7 @@ jobs:
           echo '{}' > release-drafter.json
 
       - name: Build deterministic release analysis
+        if: steps.profile.outputs.run == 'true'
         shell: bash
         run: |
           node tools/build-release-analysis.mjs \
@@ -258,6 +290,7 @@ jobs:
             --output release-analysis.json
 
       - name: Resolve affected Engine components from detected changes
+        if: steps.profile.outputs.run == 'true'
         id: affected
         shell: bash
         env:
@@ -276,6 +309,7 @@ jobs:
             echo "No component-specific paths detected; retaining requested targets: $resolved"
           fi
       - name: Validate published Base compatibility
+        if: steps.profile.outputs.run == 'true'
         id: base-compatibility
         env:
           BASE_CHANNEL: ${{ inputs.base_channel }}
@@ -306,6 +340,7 @@ jobs:
           echo "Base compatibility validated: minimum $MINIMUM_BASE_VERSION; compatible published Base $compatible_version ($base_id) from $BASE_CHANNEL"
 
       - name: Build private Engine candidate
+        if: steps.profile.outputs.run == 'true'
         env:
           CHANGED_FILES: ${{ inputs.changed_files }}
         run: >-
@@ -321,6 +356,7 @@ jobs:
           --output engine-release.json.gz
 
       - name: Build normal OrbitFS update bundle
+        if: steps.profile.outputs.run == 'true'
         env:
           COMPONENTS: ${{ steps.affected.outputs.components }}
         shell: bash
@@ -329,6 +365,7 @@ jobs:
           node tools/build-update-bundle.mjs             --version "${{ inputs.version }}"             --components "$COMPONENTS"             --minimum-deployer-protocol "${{ inputs.minimum_deployer_protocol }}"             --minimum-base-version "${{ inputs.minimum_base_version }}"             --base-channel "${{ inputs.base_channel }}"             --commit "${{ inputs.source_sha }}"             --engine-artifact engine-release.json.gz             --release-notes release-notes.md             --release-analysis release-analysis.json             --output update-release.json.gz
 
       - name: Validate OrbitFS update bundle
+        if: steps.profile.outputs.run == 'true'
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
@@ -398,11 +435,13 @@ jobs:
           NODE
 
       - name: Calculate release checksum
+        if: steps.profile.outputs.run == 'true'
         id: checksum
         shell: bash
         run: echo "sha256=$(sha256sum update-release.json.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       - name: Register Engine database package candidates
+        if: steps.profile.outputs.run == 'true'
         id: database-packages
         env:
           LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
@@ -442,6 +481,7 @@ jobs:
           echo "references=$refs" >> "$GITHUB_OUTPUT"
 
       - name: Publish Update Bundle to GitHub Release
+        if: steps.profile.outputs.run == 'true'
         id: github-release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -468,6 +508,7 @@ jobs:
           echo "GitHub release asset: $ASSET_URL"
 
       - name: Create Update release in License Master
+        if: steps.profile.outputs.run == 'true'
         id: master-release
         env:
           LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
@@ -498,6 +539,7 @@ jobs:
           echo "id=$release_id" >> "$GITHUB_OUTPUT"
 
       - name: Publish handoff complete
+        if: steps.profile.outputs.run == 'true'
         run: echo "OrbitFS Update v${{ inputs.version }} is now a draft in License Master and ready for review/validation."
 
   technical-validation:
@@ -507,6 +549,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Validate candidate
+        if: steps.profile.outputs.run == 'true'
         env:
           LICENSE_MASTER_URL: ${{ needs.candidate.outputs.license_master_url }}
           LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
@@ -534,4 +577,5 @@ jobs:
           echo "License Manager validation passed."
 
       - name: Review handoff ready
+        if: steps.profile.outputs.run == 'true'
         run: echo "License Manager validation completed. When Auto technical approval is enabled, the exact validated candidate is approved automatically for Billing Store final review. Publication remains a separate Billing Store action."
