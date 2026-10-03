@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type PROMOTE to validate current main and move UPDATE_RELEASE to it
+        description: Type PROMOTE to validate current main and move UPDATE_RELEASES to it
         required: true
         type: string
 
@@ -80,12 +80,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin UPDATE_RELEASE --prune
-          git merge-base --is-ancestor origin/UPDATE_RELEASE HEAD || {
-            echo "::error::UPDATE_RELEASE has diverged from main. Reconcile migration history without force-pushing."
+          git fetch origin UPDATE_RELEASES --prune
+          git merge-base --is-ancestor origin/UPDATE_RELEASES HEAD || {
+            echo "::error::UPDATE_RELEASES has diverged from main. Reconcile migration history without force-pushing."
             exit 1
           }
-          changed_migrations="$(git diff --name-status origin/UPDATE_RELEASE HEAD -- supabase/migrations)"
+          changed_migrations="$(git diff --name-status origin/UPDATE_RELEASES HEAD -- supabase/migrations)"
           if printf '%s\n' "$changed_migrations" | awk 'NF && $1 != "A" {bad=1; print "Immutable migration changed or deleted: " $0} END {exit !bad}'; then
             echo "::error::Existing Engine migrations may not be modified/deleted. Add forward migrations instead."
             exit 1
@@ -94,10 +94,10 @@ jobs:
           echo "Engine migration tree validated at $(git rev-parse HEAD)"
           git ls-tree -r HEAD supabase/migrations | sha256sum
 
-      - name: Promote validated main to UPDATE_RELEASE
+      - name: Promote validated main to UPDATE_RELEASES
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_BRANCH: UPDATE_RELEASE
+          RELEASE_BRANCH: UPDATE_RELEASES
           TARGET_SHA: ${{ steps.source.outputs.target_sha }}
         shell: bash
         run: |
