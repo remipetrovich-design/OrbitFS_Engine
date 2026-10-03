@@ -1,5 +1,5 @@
 -- OrbitFS Shared Engine migration: allow the restricted Engine runtime to
--- execute Base-owned normalized state RPCs.
+-- execute Base-owned normalized Library state RPCs.
 --
 -- These functions are SECURITY INVOKER. Table access therefore remains subject
 -- to the Base runtime-secret RLS policies; this only exposes the RPC entry
@@ -12,11 +12,7 @@ begin
   foreach signature in array array[
     'public.orbitfs_library_object_id(jsonb,integer)',
     'public.orbitfs_library_state_get(text)',
-    'public.orbitfs_library_state_patch(text,jsonb,jsonb,jsonb)',
-    'public.orbitfs_mcp_context_item_key(jsonb,integer)',
-    'public.orbitfs_mcp_context_get(text,text,text,text)',
-    'public.orbitfs_mcp_context_patch(text,text,text,text,jsonb,jsonb,jsonb)',
-    'public.orbitfs_mcp_context_clear(text,text,text,text)'
+    'public.orbitfs_library_state_patch(text,jsonb,jsonb,jsonb)'
   ]
   loop
     if to_regprocedure(signature) is null then
