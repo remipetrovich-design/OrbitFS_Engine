@@ -127,6 +127,8 @@ const payload = {
 	changedFiles,
 	componentFileCounts,
 	executionPolicy,
+	updateScope: 'engine-components-only-v1',
+	executor: 'orbitfs-base-inner-deployer-v1',
 	changedFileCount: changedFiles.length,
 	checkpointRequired: true,
 	minimumEngineDeployerProtocol,
