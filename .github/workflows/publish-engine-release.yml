@@ -297,8 +297,8 @@ jobs:
           REQUESTED: ${{ steps.release.outputs.components }}
         run: |
           set -euo pipefail
-          detected="$(node -e 'const j=require("./release-analysis.json"); const allowed=["apex","mcp","studio"],out=[]; for(const raw of (j.detectedComponents||[])){const x=String(raw||"").toLowerCase(); if(x==="shared"){for(const c of ["apex","mcp","studio"])if(!out.includes(c))out.push(c);} else if(allowed.includes(x)&&!out.includes(x))out.push(x);} console.log(out.join(","))' )"
-          resolved="$(REQUESTED="$REQUESTED" DETECTED="$detected" node -e 'const allowed=["apex","mcp","studio"], out=[]; for(const raw of [process.env.REQUESTED,process.env.DETECTED]) for(const value of String(raw||"").split(",")){const x=value.trim().toLowerCase(); if(allowed.includes(x)&&!out.includes(x))out.push(x)} process.stdout.write(out.join(","))')"
+          detected="$(node -e 'const j=require("./release-analysis.json"); const allowed=["base","apex","mcp","studio"],out=[]; for(const raw of (j.detectedComponents||[])){const x=String(raw||"").toLowerCase(); if(x==="shared"){for(const c of ["apex","mcp","studio"])if(!out.includes(c))out.push(c);} else if(allowed.includes(x)&&!out.includes(x))out.push(x);} console.log(out.join(","))' )"
+          resolved="$(REQUESTED="$REQUESTED" DETECTED="$detected" node -e 'const allowed=["base","apex","mcp","studio"], out=[]; for(const raw of [process.env.REQUESTED,process.env.DETECTED]) for(const value of String(raw||"").split(",")){const x=value.trim().toLowerCase(); if(allowed.includes(x)&&!out.includes(x))out.push(x)} process.stdout.write(out.join(","))')"
           test -n "$resolved" || { echo "::error::No valid update targets resolved."; exit 1; }
           echo "components=$resolved" >> "$GITHUB_OUTPUT"
           if [ -n "$detected" ]; then
@@ -339,6 +339,14 @@ jobs:
 
           echo "Base compatibility validated: minimum $MINIMUM_BASE_VERSION; compatible published Base $compatible_version ($base_id) from $BASE_CHANNEL"
 
+      - name: Build Base patch candidate
+        if: steps.profile.outputs.run == 'true' && contains(format(',{0},', steps.affected.outputs.components), ',base,')
+        run: >-
+          node tools/build-base-patch.mjs
+          --version "${{ inputs.version }}"
+          --commit "${{ inputs.source_sha }}"
+          --output base-patch.json.gz
+
       - name: Build private Engine candidate
         if: steps.profile.outputs.run == 'true'
         env:
@@ -362,7 +370,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node tools/build-update-bundle.mjs             --version "${{ inputs.version }}"             --components "$COMPONENTS"             --minimum-updater-protocol "${{ inputs.minimum_updater_protocol }}"             --minimum-base-version "${{ inputs.minimum_base_version }}"             --base-channel "${{ inputs.base_channel }}"             --commit "${{ inputs.source_sha }}"             --engine-artifact engine-release.json.gz             --release-notes release-notes.md             --release-analysis release-analysis.json             --output update-release.json.gz
+          node tools/build-update-bundle.mjs             --version "${{ inputs.version }}"             --components "$COMPONENTS"             --minimum-updater-protocol "${{ inputs.minimum_updater_protocol }}"             --minimum-base-version "${{ inputs.minimum_base_version }}"             --base-channel "${{ inputs.base_channel }}"             --commit "${{ inputs.source_sha }}"             --engine-artifact engine-release.json.gz             --base-patch-artifact base-patch.json.gz             --release-notes release-notes.md             --release-analysis release-analysis.json             --output update-release.json.gz
 
       - name: Validate OrbitFS update bundle
         if: steps.profile.outputs.run == 'true'
@@ -388,8 +396,10 @@ jobs:
           const expected=process.env.COMPONENTS.split(',').filter(Boolean).sort().join(',');
           const actual=(p.components||[]).slice().sort().join(',');
           if(expected!==actual)throw new Error('Update Bundle targets do not match workflow targets');
-          if((p.components||[]).includes('base'))throw new Error('Normal updater must not target Base');
-          if(p.payloads?.panel||p.baseBaseline)throw new Error('Normal updater must not contain a Base/Panel payload or Base baseline');
+          const baseTarget=(p.components||[]).includes('base');
+          if(baseTarget&&!p.payloads?.panel)throw new Error('Base-targeting Update is missing its Base patch payload');
+          if(!baseTarget&&p.payloads?.panel)throw new Error('Unexpected Base patch payload');
+          if(p.baseBaseline)throw new Error('Update Bundle must not contain a Base baseline');
           if(p.updateScope!=='deployed-system-v2')throw new Error('Update Bundle must declare standalone Updater scope');
           if(p.executor!=='orbitfs-updater-v2')throw new Error('Update Bundle must execute through the standalone OrbitFS Updater');
           const policy=p.executionPolicy||{};
