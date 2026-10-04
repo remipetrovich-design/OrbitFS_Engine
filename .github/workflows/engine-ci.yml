@@ -76,6 +76,14 @@ jobs:
             --commit "$GITHUB_SHA" --minimum-base-version 1.0.0 \
             --engine-artifact /tmp/orbitfs-engine-ci.json.gz \
             --output /tmp/orbitfs-update-ci.json.gz
+          node - <<'NODE'
+          const fs=require('fs'),{gunzipSync}=require('node:zlib');
+          const bundle=JSON.parse(gunzipSync(fs.readFileSync('/tmp/orbitfs-update-ci.json.gz')).toString('utf8'));
+          if(bundle.updateScope!=='engine-components-only-v1')throw new Error('CI Update bundle lost Engine-only scope');
+          if(bundle.executor!=='orbitfs-base-inner-deployer-v1')throw new Error('CI Update bundle lost Base inner-deployer executor');
+          if(bundle.payloads?.panel||bundle.baseBaseline)throw new Error('CI Update bundle contains forbidden Base/Panel payload data');
+          if((bundle.components||[]).some((component)=>!['mcp','apex','studio'].includes(String(component))))throw new Error('CI Update bundle contains a forbidden update target');
+          NODE
           node tools/verify-engine-database-package.mjs \
             /tmp/orbitfs-update-ci.json.gz "$GITHUB_SHA"
       - name: Build standalone central database packages
