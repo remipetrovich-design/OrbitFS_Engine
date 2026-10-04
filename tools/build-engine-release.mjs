@@ -23,7 +23,7 @@ const releaseAnalysisFile = arg('release-analysis', 'release-analysis.json');
 const sourceCommit = arg('commit', process.env.GITHUB_SHA || '').trim() || null;
 const minimumUpdaterProtocol = Number(arg('minimum-updater-protocol', arg('minimum-deployer-protocol', process.env.ORBITFS_MINIMUM_UPDATER_PROTOCOL || '2')));
 const minimumBaseVersion = arg('minimum-base-version', process.env.ORBITFS_MINIMUM_BASE_VERSION || '1.0.0').trim();
-const allowedComponents = new Set(['apex', 'mcp', 'studio']);
+const allowedComponents = new Set(['base', 'apex', 'mcp', 'studio']);
 const engineComponents = new Set(['apex', 'mcp', 'studio']);
 const componentManifestPaths = {
 	apex: 'src/addons/apex/manifest.ts',
@@ -32,7 +32,7 @@ const componentManifestPaths = {
 };
 
 if (!isOrbitReleaseVersion(version)) throw new Error('Invalid OrbitFS Engine release version');
-if (!components.length) throw new Error('Select at least one update target (APEX, MCP, or Studio)');
+if (!components.length) throw new Error('Select at least one update target');
 if (!Number.isInteger(minimumUpdaterProtocol) || minimumUpdaterProtocol < 1 || minimumUpdaterProtocol > 100) throw new Error('minimum Updater protocol must be an integer from 1 to 100');
 if (!isOrbitReleaseVersion(minimumBaseVersion)) throw new Error('Invalid minimum Base version');
 for (const component of components) {
@@ -103,7 +103,6 @@ let releaseAnalysis = {};
 if (existsSync(resolve(ROOT, releaseAnalysisFile))) { try { releaseAnalysis = JSON.parse(readFileSync(resolve(ROOT, releaseAnalysisFile), 'utf8')); } catch { throw new Error('Invalid release analysis JSON'); } }
 
 const detectedComponents = Array.isArray(releaseAnalysis?.detectedComponents) ? releaseAnalysis.detectedComponents.map((x) => String(x).toLowerCase()) : [];
-if (detectedComponents.includes('base')) throw new Error('Normal Engine updates must not contain Base changes. Ship Base changes through V1-vercel-base and the Base Deployer.');
 const changedComponents = detectedComponents.filter((x) => allowedComponents.has(x) || x === 'shared');
 const selectedSet = new Set(components);
 if (changedComponents.includes('shared')) {
