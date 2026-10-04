@@ -12,7 +12,7 @@ const components=[...new Set(arg('components').split(',').map(v=>v.trim().toLowe
 const sourceCommit=arg('commit',process.env.GITHUB_SHA||'').trim()||null;
 const minimumBaseVersion=arg('minimum-base-version').trim();
 const baseCompatibilityChannel=arg('base-channel','stable').trim().toLowerCase();
-const minimumEngineDeployerProtocol=Number(arg('minimum-deployer-protocol','1'));
+const minimumUpdaterProtocol=Number(arg('minimum-updater-protocol',arg('minimum-deployer-protocol','2')));
 const engineArtifact=resolve(ROOT,arg('engine-artifact','engine-release.json.gz'));
 const output=resolve(ROOT,arg('output','update-release.json.gz'));
 const releaseNotesFile=resolve(ROOT,arg('release-notes','release-notes.md'));
@@ -26,7 +26,7 @@ if(!components.length)throw new Error('Select at least one update target');
 for(const c of components)if(!allowed.has(c))throw new Error('Unknown update target: '+c);
 if(!isOrbitReleaseVersion(minimumBaseVersion))throw new Error('Invalid minimum Base version');
 if(!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(baseCompatibilityChannel))throw new Error('Invalid Base compatibility channel');
-if(!Number.isInteger(minimumEngineDeployerProtocol)||minimumEngineDeployerProtocol<1||minimumEngineDeployerProtocol>100)throw new Error('Invalid minimum Engine Deployer protocol');
+if(!Number.isInteger(minimumUpdaterProtocol)||minimumUpdaterProtocol<1||minimumUpdaterProtocol>100)throw new Error('Invalid minimum Updater protocol');
 
 function readGzipJson(path,label){
   if(!existsSync(path))throw new Error(label+' artifact not found: '+path);
@@ -49,7 +49,7 @@ const engineRaw=readGzipJson(engineArtifact,'Engine');
 if(!['orbitfs-engine-release-v2','orbitfs-engine-release-v3'].includes(String(engineRaw.format||''))||![2,3].includes(Number(engineRaw.schemaVersion)))throw new Error('Engine artifact must be a supported OrbitFS Engine release');
 if(String(engineRaw.version)!==version||String(engineRaw.sourceCommit||'')!==String(sourceCommit||''))throw new Error('Engine artifact identity mismatch');
 if(String(engineRaw.minimumBaseVersion)!==minimumBaseVersion)throw new Error('Engine minimum Base version mismatch');
-if(Number(engineRaw.minimumEngineDeployerProtocol)!==minimumEngineDeployerProtocol)throw new Error('Engine deployer protocol mismatch');
+if(Number(engineRaw.minimumUpdaterProtocol??engineRaw.minimumEngineDeployerProtocol)!==minimumUpdaterProtocol)throw new Error('Updater protocol mismatch');
 validateFiles(engineRaw.files,'Engine payload');
 const rawExecutionPolicy=engineRaw?.executionPolicy&&typeof engineRaw.executionPolicy==='object'?engineRaw.executionPolicy:{};
 if(rawExecutionPolicy.mode!=='per-installation-entitlement-intersection-v1'||rawExecutionPolicy.fileClassification!=='component'||rawExecutionPolicy.sharedFiles!=='always-required'||rawExecutionPolicy.componentFiles!=='apply-only-when-authorized')throw new Error('Engine artifact component execution policy is invalid');
@@ -126,7 +126,7 @@ const payload={
   updateScope:'deployed-system-v2',
   executor:'orbitfs-updater-v2',
   checkpointRequired:true,
-  minimumEngineDeployerProtocol,
+  minimumUpdaterProtocol,
   minimumBaseVersion,
   baseCompatibilityChannel,
   releaseId:'update-'+version,
@@ -143,4 +143,4 @@ const payload={
 };
 const archive=gzipSync(Buffer.from(JSON.stringify(payload)),{level:9});
 writeFileSync(output,archive);
-console.log(JSON.stringify({ok:true,format:payload.format,version,components,componentVersions,minimumBaseVersion,baseCompatibilityChannel,minimumEngineDeployerProtocol,databaseMigrationCount:migrations.length,databaseChangedMigrationCount:changedMigrationCount,engineFiles:engine?.files?.length||0,fileCount,archiveBytes:archive.length,sha256:createHash('sha256').update(archive).digest('hex')},null,2));
+console.log(JSON.stringify({ok:true,format:payload.format,version,components,componentVersions,minimumBaseVersion,baseCompatibilityChannel,minimumUpdaterProtocol,databaseMigrationCount:migrations.length,databaseChangedMigrationCount:changedMigrationCount,engineFiles:engine?.files?.length||0,fileCount,archiveBytes:archive.length,sha256:createHash('sha256').update(archive).digest('hex')},null,2));
