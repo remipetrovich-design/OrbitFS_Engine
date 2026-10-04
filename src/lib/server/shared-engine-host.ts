@@ -101,7 +101,7 @@ function configuredPanelUrl() {
 	return raw?publicUrl(raw,'Panel URL'):null;
 }
 
-async function normalizeAttachedMcp(actorUserId:string|null) {
+async function requireAttachedMcpSetup(actorUserId:string|null) {
 	const db=getSupabaseAdmin();
 	const result=await db.from('orbitfs_addons').select('config,runtime,installed,attached').eq('id','mcp').maybeSingle();
 	if(result.error)throw result.error;
@@ -110,9 +110,9 @@ async function normalizeAttachedMcp(actorUserId:string|null) {
 	const config=objectValue(row.config),runtime=objectValue(row.runtime),setup=objectValue(config.engineSetup),stamp=now();
 	const version=Number(runtime.setupVersion||setup.version||1);
 	const updated=await db.from('orbitfs_addons').update({
-		configured:true,status:'attached',
-		config:{...config,engineSetup:{...setup,state:'complete',version,automatic:true,configurationReviewedAt:setup.configurationReviewedAt||stamp,configurationReviewedByUserId:setup.configurationReviewedByUserId||actorUserId,updatedAt:stamp,updatedByUserId:actorUserId}},
-		runtime:{...runtime,setupState:'complete',setupVersion:version,transport:'/mcp',deployment:'ready',compute:'vercel',database:'supabase',online:true,lastSetupAt:stamp,lastSetupBy:actorUserId},updated_at:stamp
+		configured:false,status:'attached',
+		config:{...config,engineSetup:{...setup,state:'required',version,automatic:false,configurationReviewedAt:null,configurationReviewedByUserId:null,updatedAt:stamp,updatedByUserId:actorUserId}},
+		runtime:{...runtime,setupState:'required',setupVersion:version,transport:'/mcp',deployment:'ready',compute:'vercel',database:'supabase',online:false,lastSetupAt:stamp,lastSetupBy:actorUserId},updated_at:stamp
 	}).eq('id','mcp');
 	if(updated.error)throw updated.error;
 }
@@ -126,7 +126,7 @@ export async function linkSharedEngineHost(input:Record<string,any>) {
 	if(['linked','ready'].includes(current.state)&&current.panelUrl&&current.panelUrl!==panelUrl)throw Object.assign(new Error('This Shared Engine Host is already linked to another OrbitFS Panel.'),{status:409,code:'ENGINE_HOST_ALREADY_LINKED'});
 	const stamp=now(),actorUserId=String(input.actorUserId||input.actor_user_id||'').trim()||null;
 	const linked=await saveSharedEngineHostState({state:'ready',panelUrl,hostUrl:current.hostUrl||runtimeHostUrl(),linkedAt:current.linkedAt||stamp,linkedByUserId:actorUserId||current.linkedByUserId,lastSyncAt:stamp,lastHealthAt:stamp,lastError:null},current);
-	await normalizeAttachedMcp(actorUserId);
+	await requireAttachedMcpSetup(actorUserId);
 	return linked;
 }
 
