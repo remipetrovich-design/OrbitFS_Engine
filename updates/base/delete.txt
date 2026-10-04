@@ -1,0 +1,2 @@
+# Paths listed here are removed from the deployed Base when this Update is applied.
+# Use repository-relative paths, one per line. Leave empty when no Base files are deleted.
