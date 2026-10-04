@@ -79,8 +79,8 @@ jobs:
           node - <<'NODE'
           const fs=require('fs'),{gunzipSync}=require('node:zlib');
           const bundle=JSON.parse(gunzipSync(fs.readFileSync('/tmp/orbitfs-update-ci.json.gz')).toString('utf8'));
-          if(bundle.updateScope!=='engine-components-only-v1')throw new Error('CI Update bundle lost Engine-only scope');
-          if(bundle.executor!=='orbitfs-base-inner-deployer-v1')throw new Error('CI Update bundle lost Base inner-deployer executor');
+          if(bundle.updateScope!=='deployed-system-v2')throw new Error('CI Update bundle lost standalone Updater scope');
+          if(bundle.executor!=='orbitfs-updater-v2')throw new Error('CI Update bundle lost standalone Updater executor');
           if(bundle.payloads?.panel||bundle.baseBaseline)throw new Error('CI Update bundle contains forbidden Base/Panel payload data');
           if((bundle.components||[]).some((component)=>!['mcp','apex','studio'].includes(String(component))))throw new Error('CI Update bundle contains a forbidden update target');
           NODE
