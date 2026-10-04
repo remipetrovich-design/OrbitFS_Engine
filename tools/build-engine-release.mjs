@@ -159,7 +159,7 @@ console.log(JSON.stringify({
 	version,
 	components,
 	checkpointRequired: true,
-	minimumEngineDeployerProtocol,
+	minimumUpdaterProtocol,
 	minimumBaseVersion,
 	output: basename(output),
 	sha256,
