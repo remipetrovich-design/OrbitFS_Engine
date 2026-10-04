@@ -4,10 +4,10 @@
   "mode": "snapshot",
   "initialReleaseVersion": "1.0.0",
   "sourceRepository": "remipetrovich-design/OrbitFS_Engine",
-  "releaseBranch": "main",
+  "releaseBranch": "UPDATE_RELEASE",
   "locked": true,
   "purpose": "Bootstrap the Update system with one full Engine snapshot at v1.0.0. After v1.0.0 is published, Stage 1 uses the latest published Update source_sha as the differential baseline.",
-  "note": "The bootstrap snapshot uses the exact main commit inspected by Dev Panel. Minimum Base version is a compatibility floor, not an exact Base version match.",
+  "note": "The bootstrap snapshot uses the exact UPDATE_RELEASE commit inspected by Dev Panel. Minimum Base version is a compatibility floor, not an exact Base version match.",
   "compatibilityPolicy": {
     "minimumBaseVersionSemantics": "at-or-above",
     "comparison": "publishedBaseVersion >= minimumBaseVersion",
