@@ -21,11 +21,6 @@ on:
         required: true
         default: stable
         type: string
-      base:
-        description: Base files changed
-        required: true
-        default: false
-        type: boolean
       apex:
         description: APEX engine changed
         required: true
@@ -106,14 +101,9 @@ jobs:
           fi
 
           components=()
-          if [ "${{ inputs.base }}" = "true" ]; then components+=(base); fi
           if [ "${{ inputs.apex }}" = "true" ]; then components+=(apex); fi
           if [ "${{ inputs.mcp }}" = "true" ]; then components+=(mcp); fi
           if [ "${{ inputs.studio }}" = "true" ]; then components+=(studio); fi
-          if [ ${#components[@]} -eq 0 ]; then
-            echo "::error::Select at least one update target (Base, APEX, MCP, or Studio)."
-            exit 1
-          fi
           component_csv=$(IFS=,; echo "${components[*]}")
           echo "components=$component_csv" >> "$GITHUB_OUTPUT"
 
