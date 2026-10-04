@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       source_sha:
-        description: Exact UPDATE_RELEASE commit inspected by Dev Panel
+        description: Exact main commit inspected by Dev Panel
         required: true
         type: string
       channel:
@@ -95,8 +95,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$GITHUB_REF_NAME" != "UPDATE_RELEASE" ]; then
-            echo "::error::Engine/add-on update candidates may only be built from UPDATE_RELEASE. Use the UPDATE_RELEASE branch for update candidates."
+          if [ "$GITHUB_REF_NAME" != "main" ]; then
+            echo "::error::Engine/add-on update candidates are built from main."
             exit 1
           fi
 
@@ -118,7 +118,7 @@ jobs:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
 
-      - name: Verify UPDATE_RELEASE source identity
+      - name: Verify main source identity
         if: steps.profile.outputs.run == 'true'
         env:
           INSPECTED_SHA: ${{ inputs.source_sha }}
@@ -126,8 +126,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$INSPECTED_SHA" || { echo "::error::Checked-out source does not match Dev Panel inspection."; exit 1; }
-          git fetch origin UPDATE_RELEASE --prune
-          test "$(git rev-parse origin/UPDATE_RELEASE)" = "$INSPECTED_SHA" || { echo "::error::UPDATE_RELEASE moved after Dev Panel inspection. Inspect again before building."; exit 1; }
+          git fetch origin main --prune
+          test "$(git rev-parse origin/main)" = "$INSPECTED_SHA" || { echo "::error::main moved after Dev Panel inspection. Inspect again before building."; exit 1; }
 
       - name: Require release database tree to match current main
         if: steps.profile.outputs.run == 'true'
@@ -138,7 +138,7 @@ jobs:
           release_tree="$(git rev-parse "HEAD:supabase/migrations")"
           main_tree="$(git rev-parse "origin/main:supabase/migrations")"
           if [ "$release_tree" != "$main_tree" ]; then
-            echo "::error::UPDATE_RELEASE database migrations differ from main. Promote and validate main before packaging."
+            echo "::error::Inspected source database migrations differ from current main. Inspect current main again before packaging."
             git diff --name-status HEAD origin/main -- supabase/migrations || true
             exit 1
           fi
@@ -390,8 +390,8 @@ jobs:
           if(expected!==actual)throw new Error('Update Bundle targets do not match workflow targets');
           if((p.components||[]).includes('base'))throw new Error('Normal updater must not target Base');
           if(p.payloads?.panel||p.baseBaseline)throw new Error('Normal updater must not contain a Base/Panel payload or Base baseline');
-          if(p.updateScope!=='engine-components-only-v1')throw new Error('Update Bundle must declare Engine-component-only scope');
-          if(p.executor!=='orbitfs-base-inner-deployer-v1')throw new Error('Update Bundle must execute through the Base-owned inner deployer');
+          if(p.updateScope!=='deployed-system-v2')throw new Error('Update Bundle must declare standalone Updater scope');
+          if(p.executor!=='orbitfs-updater-v2')throw new Error('Update Bundle must execute through the standalone OrbitFS Updater');
           const policy=p.executionPolicy||{};
           if(policy.mode!=='per-installation-entitlement-intersection-v1'||policy.fileClassification!=='component'||policy.sharedFiles!=='always-required'||policy.componentFiles!=='apply-only-when-authorized')throw new Error('Update Bundle component execution policy is invalid');
           const counts=p.componentFileCounts||{};
