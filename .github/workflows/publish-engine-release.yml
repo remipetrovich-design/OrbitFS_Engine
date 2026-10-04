@@ -36,8 +36,8 @@ on:
         required: true
         default: false
         type: boolean
-      minimum_deployer_protocol:
-        description: Minimum Base Engine Deployer protocol required by this Engine package
+      minimum_updater_protocol:
+        description: Minimum standalone Updater protocol required by this Update package
         required: true
         default: "1"
         type: string
@@ -347,7 +347,7 @@ jobs:
           node tools/build-engine-release.mjs
           --version "${{ inputs.version }}"
           --components "${{ steps.affected.outputs.components }}"
-          --minimum-deployer-protocol "${{ inputs.minimum_deployer_protocol }}"
+          --minimum-updater-protocol "${{ inputs.minimum_updater_protocol }}"
           --minimum-base-version "${{ inputs.minimum_base_version }}"
           --commit "${{ inputs.source_sha }}"
           --release-notes release-notes.md
@@ -362,7 +362,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node tools/build-update-bundle.mjs             --version "${{ inputs.version }}"             --components "$COMPONENTS"             --minimum-deployer-protocol "${{ inputs.minimum_deployer_protocol }}"             --minimum-base-version "${{ inputs.minimum_base_version }}"             --base-channel "${{ inputs.base_channel }}"             --commit "${{ inputs.source_sha }}"             --engine-artifact engine-release.json.gz             --release-notes release-notes.md             --release-analysis release-analysis.json             --output update-release.json.gz
+          node tools/build-update-bundle.mjs             --version "${{ inputs.version }}"             --components "$COMPONENTS"             --minimum-updater-protocol "${{ inputs.minimum_updater_protocol }}"             --minimum-base-version "${{ inputs.minimum_base_version }}"             --base-channel "${{ inputs.base_channel }}"             --commit "${{ inputs.source_sha }}"             --engine-artifact engine-release.json.gz             --release-notes release-notes.md             --release-analysis release-analysis.json             --output update-release.json.gz
 
       - name: Validate OrbitFS update bundle
         if: steps.profile.outputs.run == 'true'
@@ -372,7 +372,7 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha }}
           MINIMUM_BASE_VERSION: ${{ inputs.minimum_base_version }}
           BASE_CHANNEL: ${{ inputs.base_channel }}
-          MINIMUM_DEPLOYER_PROTOCOL: ${{ inputs.minimum_deployer_protocol }}
+          MINIMUM_UPDATER_PROTOCOL: ${{ inputs.minimum_updater_protocol }}
           COMPONENTS: ${{ steps.affected.outputs.components }}
         run: |
           set -euo pipefail
@@ -384,7 +384,7 @@ jobs:
           if(p.version!==process.env.VERSION||p.sourceCommit!==process.env.SOURCE_SHA)throw new Error('Update Bundle source/version mismatch');
           if(p.minimumBaseVersion!==process.env.MINIMUM_BASE_VERSION)throw new Error('Update Bundle minimum Base compatibility mismatch');
           if(p.baseCompatibilityChannel!==process.env.BASE_CHANNEL)throw new Error('Update Bundle Base compatibility channel mismatch');
-          if(Number(p.minimumEngineDeployerProtocol)!==Number(process.env.MINIMUM_DEPLOYER_PROTOCOL))throw new Error('Update Bundle deployer protocol mismatch');
+          if(Number(p.minimumUpdaterProtocol)!==Number(process.env.MINIMUM_UPDATER_PROTOCOL))throw new Error('Update Bundle Updater protocol mismatch');
           const expected=process.env.COMPONENTS.split(',').filter(Boolean).sort().join(',');
           const actual=(p.components||[]).slice().sort().join(',');
           if(expected!==actual)throw new Error('Update Bundle targets do not match workflow targets');
