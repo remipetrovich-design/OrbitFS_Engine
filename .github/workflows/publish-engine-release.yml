@@ -39,7 +39,7 @@ on:
       minimum_updater_protocol:
         description: Minimum standalone Updater protocol required by this Update package
         required: true
-        default: "1"
+        default: "2"
         type: string
       minimum_base_version:
         description: Minimum OrbitFS Base compatibility floor; newer approved published Base versions are valid
