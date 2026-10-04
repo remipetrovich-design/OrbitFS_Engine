@@ -110,7 +110,7 @@ if (changedComponents.includes('shared')) {
 		if (!selectedSet.has(component)) throw new Error('Shared Engine runtime changes affect APEX, MCP and Studio; select all Engine components for this release.');
 	}
 }
-for (const component of changedComponents.filter((x) => x !== 'shared')) {
+for (const component of detectedComponents.filter((x) => ['base','apex','mcp','studio'].includes(x))) {
 	if (!selectedSet.has(component)) throw new Error('Release contains ' + component + ' changes but ' + component + ' was not selected.');
 }
 const databaseResult = buildDatabaseContract({ root: ROOT, releaseAnalysis, components });
@@ -120,7 +120,7 @@ const payload = {
 	format: 'orbitfs-engine-release-v3',
 	manifestVersion: 1,
 	version,
-	components,
+	components: components.filter((value) => engineComponents.has(value)),
 	componentVersions,
 	changedComponents,
 	changedFiles,
