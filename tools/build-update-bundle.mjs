@@ -90,7 +90,7 @@ const database=engineRaw?.database&&typeof engineRaw.database==='object'?engineR
 const migrations=Array.isArray(database.migrations)?database.migrations:[];
 const changedMigrationCount=Number(engineRaw?.databaseChangedMigrationCount||0);
 if(database.format!=='orbitfs-db-migrations-v1'||database.mode!=='shared-panel'||database.provider!=='supabase')throw new Error('Update database migration contract is invalid');
-if(Number(database.migrationCount||0)!==migrations.length||Number(engineRaw.databaseMigrationCount||0)!==migrations.length)throw new Error('Update database migration count does not match its migration list');
+if(Number(database.migrationCount||0)!==migrations.length||(engineRaw&&Number(engineRaw.databaseMigrationCount||0)!==migrations.length))throw new Error('Update database migration count does not match its migration list');
 if(!Number.isInteger(changedMigrationCount)||changedMigrationCount<0||changedMigrationCount>migrations.length)throw new Error('Changed database migration count is invalid');
 if(releaseAnalysis?.flags?.schemaChanged===true&&changedMigrationCount<1)throw new Error('Database/schema changes were detected, but the artifact contains no new immutable customer database migration.');
 const migrationIds=new Set();
@@ -134,8 +134,8 @@ const payload={
   updateVersion:version,
   components,
   componentVersions,
-  changedFiles:Array.isArray(engineRaw.changedFiles)?engineRaw.changedFiles:[],
-  changedFileCount:Number(engineRaw.changedFileCount||0),
+  changedFiles:Array.isArray(engineRaw?.changedFiles)?engineRaw.changedFiles:[],
+  changedFileCount:Number(engineRaw?.changedFileCount||0),
   componentFileCounts,
   executionPolicy,
   updateScope:'deployed-system-v2',
