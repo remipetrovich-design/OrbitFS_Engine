@@ -469,7 +469,8 @@ jobs:
           set -euo pipefail
           test -n "$LICENSE_MASTER_API_TOKEN" || { echo "::error::Missing LICENSE_MASTER_API_TOKEN"; exit 1; }
           refs='[]'
-          targets="engine-shared,$COMPONENTS"
+          database_components="$(tr ',' '\n' <<<"$COMPONENTS" | sed '/^$/d;/^base$/d' | paste -sd, -)"
+          targets="engine-shared${database_components:+,$database_components}"
           IFS=',' read -ra parts <<< "$targets"
           for component in "${parts[@]}"; do
             component="$(echo "$component" | xargs)"
@@ -488,7 +489,7 @@ jobs:
             reference="$(jq -c '{id:.package.id,component:.package.component,databaseSchemaVersion:.package.databaseSchemaVersion,sha256:.package.sha256,sourceCommit:.package.sourceCommit}' <<<"$response")"
             refs="$(jq -c --argjson item "$reference" '. + [$item]' <<<"$refs")"
           done
-          component_count="$(tr ',' '\n' <<<"$COMPONENTS" | sed '/^$/d' | wc -l | xargs)"
+          component_count="$(tr ',' '\n' <<<"$COMPONENTS" | sed '/^$/d;/^base$/d' | wc -l | xargs)"
           expected_count="$((1 + component_count))"
           actual_count="$(jq 'length' <<<"$refs")"
           [ "$actual_count" -eq "$expected_count" ] || { echo "::error::Database package reference count mismatch."; exit 1; }
