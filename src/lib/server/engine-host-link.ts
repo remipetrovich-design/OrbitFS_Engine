@@ -117,6 +117,37 @@ export async function getEngineHostLink(engineIdInput: unknown) {
 	};
 }
 
+async function runAutomaticMcpSetup(row:any, host:any, actorUserId:string|null){
+	const db=getSupabaseAdmin();
+	const requiredTables=['mcp_clients','mcp_oauth_clients','mcp_oauth_codes','mcp_oauth_tokens'];
+	for(const table of requiredTables){
+		const probe=await db.from(table).select('*',{head:true,count:'exact'}).limit(1);
+		if(probe.error)throw Object.assign(new Error(`MCP OAuth storage is not ready: ${table}`),{status:500,code:'MCP_OAUTH_STORAGE_NOT_READY',cause:probe.error});
+	}
+	const panelUrl=String(host.panelUrl||'').replace(/\/$/,'');
+	const hostUrl=String(host.hostUrl||'').replace(/\/$/,'');
+	if(!panelUrl||!hostUrl)throw Object.assign(new Error('MCP OAuth setup requires linked Panel and Engine Host URLs'),{status:409,code:'MCP_OAUTH_URLS_MISSING'});
+	for(const endpoint of [`${panelUrl}/oauth/register`,`${panelUrl}/oauth/token`,`${panelUrl}/oauth/authorize`]){
+		const response=await fetch(endpoint,{method:'GET',redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(15000)}).catch(()=>null);
+		if(!response||response.status===404||response.status>=500)throw Object.assign(new Error(`MCP OAuth endpoint is unavailable: ${endpoint}`),{status:502,code:'MCP_OAUTH_ENDPOINT_UNAVAILABLE'});
+	}
+	const discovery=await fetch(`${hostUrl}/.well-known/oauth-protected-resource/mcp`,{cache:'no-store',signal:AbortSignal.timeout(15000)}).catch(()=>null);
+	if(!discovery||!discovery.ok)throw Object.assign(new Error('MCP OAuth protected-resource discovery is unavailable'),{status:502,code:'MCP_OAUTH_DISCOVERY_UNAVAILABLE'});
+	const document:any=await discovery.json().catch(()=>null);
+	if(!document||String(document.resource||'')!==`${hostUrl}/mcp`||!Array.isArray(document.authorization_servers)||!document.authorization_servers.includes(panelUrl)){
+		throw Object.assign(new Error('MCP OAuth discovery does not match this installation'),{status:502,code:'MCP_OAUTH_DISCOVERY_INVALID'});
+	}
+	const config=objectValue(row.config),runtime=objectValue(row.runtime),previousSetup=objectValue(config.engineSetup),stamp=new Date().toISOString();
+	const setup={...previousSetup,state:'complete',automatic:true,version:Number(runtime.setupVersion||previousSetup.version||1),configurationReviewedAt:stamp,configurationReviewedByUserId:actorUserId,updatedAt:stamp,updatedByUserId:actorUserId};
+	const updated=await db.from('orbitfs_addons').update({
+		configured:true,status:'attached',
+		config:{...config,engineSetup:setup},
+		runtime:{...runtime,setupState:'complete',setupVersion:setup.version,transport:'/mcp',deployment:'ready',compute:'vercel',database:'supabase',online:true,lastSetupAt:stamp,lastSetupBy:actorUserId,lastSetupError:null},
+		updated_at:stamp
+	}).eq('id','mcp');
+	if(updated.error)throw updated.error;
+}
+
 export async function pairEngineHost(input: Record<string, any>) {
 	const host = await assertSharedEngineHostLinked();
 	const engineId = normalizeEngineId(input.engineId || input.engine_id);
@@ -154,7 +185,7 @@ export async function pairEngineHost(input: Record<string, any>) {
 	const previousSetupState = setupStateFor(row);
 	const stamp = new Date().toISOString();
 	const automaticMcp = engineId === 'mcp';
-	const setupState: EngineSetupState = automaticMcp ? 'complete' : previousSetupState === 'complete' ? 'complete' : 'required';
+	const setupState: EngineSetupState = automaticMcp ? 'in_progress' : previousSetupState === 'complete' ? 'complete' : 'required';
 	const engineSetup = {
 		...previousSetup,
 		state: setupState,
@@ -163,8 +194,8 @@ export async function pairEngineHost(input: Record<string, any>) {
 		updatedByUserId: actor?.id || null,
 		...(automaticMcp ? {
 			automatic: true,
-			configurationReviewedAt: previousSetup.configurationReviewedAt || stamp,
-			configurationReviewedByUserId: previousSetup.configurationReviewedByUserId || actor?.id || null
+			configurationReviewedAt: null,
+			configurationReviewedByUserId: null
 		} : {})
 	};
 	const link = {
@@ -200,7 +231,7 @@ export async function pairEngineHost(input: Record<string, any>) {
 		compute: 'vercel',
 		database: 'supabase',
 		transport: engineId === 'mcp' ? '/mcp' : (runtime.transport || null),
-		online: automaticMcp ? true : runtime.online === true,
+		online: automaticMcp ? false : runtime.online === true,
 		engineMode: engineId === 'mcp' ? 'running' : engineModeFor(engineId,runtime)
 	};
 	const authoritativeManifest=ENGINE_MANIFESTS[engineId]||null;
@@ -224,6 +255,23 @@ export async function pairEngineHost(input: Record<string, any>) {
 		updated_at: stamp
 	}).eq('id', engineId);
 	if (error) throw error;
+	if(automaticMcp){
+		try{
+			const fresh=await getEngineRow('mcp');
+			await runAutomaticMcpSetup(fresh,host,actor?.id||null);
+		}catch(setupError:any){
+			const failedAt=new Date().toISOString();
+			const current=await getEngineRow('mcp');
+			const failedConfig=objectValue(current.config),failedRuntime=objectValue(current.runtime),failedSetup=objectValue(failedConfig.engineSetup);
+			await db.from('orbitfs_addons').update({
+				configured:false,
+				config:{...failedConfig,engineSetup:{...failedSetup,state:'error',automatic:true,updatedAt:failedAt,updatedByUserId:actor?.id||null}},
+				runtime:{...failedRuntime,setupState:'error',online:false,lastSetupAt:failedAt,lastSetupBy:actor?.id||null,lastSetupError:String(setupError?.message||'MCP setup failed')},
+				updated_at:failedAt
+			}).eq('id','mcp');
+			throw setupError;
+		}
+	}
 	return getEngineHostLink(engineId);
 }
 
