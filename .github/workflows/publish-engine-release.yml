@@ -360,14 +360,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ENGINE_COMPONENTS="$(printf '%s' "${{ steps.affected.outputs.components }}" | tr ',' '\n' | grep -E '^(apex|mcp|studio)
-          --minimum-updater-protocol "${{ inputs.minimum_updater_protocol }}"
-          --minimum-base-version "${{ inputs.minimum_base_version }}"
-          --commit "${{ inputs.source_sha }}"
-          --release-notes release-notes.md
-          --release-analysis release-analysis.json
-          --changed-files "$CHANGED_FILES"
-          --output engine-release.json.gz
+          ENGINE_COMPONENTS="$(node -e 'const xs=process.argv[1].split(",").filter(x=>["apex","mcp","studio"].includes(x)); process.stdout.write(xs.join(","))' "${{ steps.affected.outputs.components }}")"
+          test -n "$ENGINE_COMPONENTS"
+          node tools/build-engine-release.mjs \
+            --version "${{ inputs.version }}" \
+            --components "$ENGINE_COMPONENTS" \
+            --minimum-updater-protocol "${{ inputs.minimum_updater_protocol }}" \
+            --minimum-base-version "${{ inputs.minimum_base_version }}" \
+            --commit "${{ inputs.source_sha }}" \
+            --release-notes release-notes.md \
+            --release-analysis release-analysis.json \
+            --changed-files "$CHANGED_FILES" \
+            --output engine-release.json.gz
 
       - name: Build normal OrbitFS update bundle
         if: steps.profile.outputs.run == 'true'
