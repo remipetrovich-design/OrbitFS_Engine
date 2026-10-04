@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
-const UPDATE_COMPONENTS = new Set(['apex', 'mcp', 'studio']);
+const UPDATE_COMPONENTS = new Set(['base', 'apex', 'mcp', 'studio']);
 const MAX_MIGRATION_BYTES = 2 * 1024 * 1024;
 const MAX_DATABASE_BYTES = 8 * 1024 * 1024;
 const LEGACY_FLAT_MIGRATIONS = new Set([
@@ -81,9 +81,8 @@ export function buildDatabaseContract({ root = process.cwd(), releaseAnalysis = 
 			continue;
 		}
 		const parsed = parseMigrationPath(file);
-		if (!parsed) throw new Error('Database SQL changes must be under supabase/migrations/{shared|apex|mcp|studio}/YYYYMMDDHHMMSS_description.sql: ' + file);
-		if (parsed.component === 'base') throw new Error('Normal Engine updates must not contain Base database migrations. Add Base migrations to V1-vercel-base instead: ' + file);
-		if (!status.startsWith('A')) throw new Error('Published customer database migrations are immutable. Add a new migration instead of modifying, renaming, or deleting: ' + file);
+		if (!parsed) throw new Error('Database SQL changes must be under supabase/migrations/{shared|base|apex|mcp|studio}/YYYYMMDDHHMMSS_description.sql: ' + file);
+				if (!status.startsWith('A')) throw new Error('Published customer database migrations are immutable. Add a new migration instead of modifying, renaming, or deleting: ' + file);
 		if (parsed.component === 'shared') {
 			if (!selected.size) throw new Error('Shared database migration requires at least one Engine component target: ' + file);
 		} else if (!selected.has(parsed.component)) {
@@ -113,8 +112,7 @@ export function buildDatabaseContract({ root = process.cwd(), releaseAnalysis = 
 		if (isLegacyFlatMigration(file)) continue;
 		const parsed = parseMigrationPath(file);
 		if (!parsed) throw new Error('Invalid customer migration filename/path: ' + file);
-		if (parsed.component === 'base') throw new Error('Base database migrations are not permitted in V1-vercel-engine Update releases: ' + file);
-		if (parsed.component !== 'shared' && !selected.has(parsed.component)) continue;
+				if (parsed.component !== 'shared' && !selected.has(parsed.component)) continue;
 		if (parsed.component === 'shared' && !selected.size) continue;
 		const migration = buildMigration(root, file);
 		if (seenIds.has(migration.id)) throw new Error('Duplicate database migration id: ' + migration.id);
@@ -147,6 +145,6 @@ export function validateDatabaseTree(root = process.cwd()) {
 	return buildDatabaseContract({
 		root,
 		releaseAnalysis: { files: [], flags: { schemaChanged: false } },
-		components: ['apex', 'mcp', 'studio']
+		components: ['base', 'apex', 'mcp', 'studio']
 	});
 }
