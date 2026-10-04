@@ -48,22 +48,22 @@ function validateFiles(files,label,{allowEmpty=false}={}){
   }
 }
 
-const engineRaw=readGzipJson(engineArtifact,'Engine');
-if(!['orbitfs-engine-release-v2','orbitfs-engine-release-v3'].includes(String(engineRaw.format||''))||![2,3].includes(Number(engineRaw.schemaVersion)))throw new Error('Engine artifact must be a supported OrbitFS Engine release');
-if(String(engineRaw.version)!==version||String(engineRaw.sourceCommit||'')!==String(sourceCommit||''))throw new Error('Engine artifact identity mismatch');
-if(String(engineRaw.minimumBaseVersion)!==minimumBaseVersion)throw new Error('Engine minimum Base version mismatch');
-if(Number(engineRaw.minimumUpdaterProtocol??engineRaw.minimumEngineDeployerProtocol)!==minimumUpdaterProtocol)throw new Error('Updater protocol mismatch');
-validateFiles(engineRaw.files,'Engine source payload');
-const rawExecutionPolicy=engineRaw?.executionPolicy&&typeof engineRaw.executionPolicy==='object'?engineRaw.executionPolicy:{};
-if(rawExecutionPolicy.mode!=='per-installation-entitlement-intersection-v1'||rawExecutionPolicy.fileClassification!=='component'||rawExecutionPolicy.sharedFiles!=='always-required'||rawExecutionPolicy.componentFiles!=='apply-only-when-authorized')throw new Error('Engine artifact component execution policy is invalid');
-const rawCounts=engineRaw?.componentFileCounts&&typeof engineRaw.componentFileCounts==='object'?engineRaw.componentFileCounts:{};
-for(const key of ['shared','apex','mcp','studio']){
-  const expected=engineRaw.files.filter(file=>String(file?.component||'shared').toLowerCase()===key).length;
-  if(Number(rawCounts[key]||0)!==expected)throw new Error('Engine artifact component file count mismatch for '+key);
-}
-
+let engineRaw=null;
 let engine=null;
 if(engineTargets.length){
+  engineRaw=readGzipJson(engineArtifact,'Engine');
+  if(!['orbitfs-engine-release-v2','orbitfs-engine-release-v3'].includes(String(engineRaw.format||''))||![2,3].includes(Number(engineRaw.schemaVersion)))throw new Error('Engine artifact must be a supported OrbitFS Engine release');
+  if(String(engineRaw.version)!==version||String(engineRaw.sourceCommit||'')!==String(sourceCommit||''))throw new Error('Engine artifact identity mismatch');
+  if(String(engineRaw.minimumBaseVersion)!==minimumBaseVersion)throw new Error('Engine minimum Base version mismatch');
+  if(Number(engineRaw.minimumUpdaterProtocol??engineRaw.minimumEngineDeployerProtocol)!==minimumUpdaterProtocol)throw new Error('Updater protocol mismatch');
+  validateFiles(engineRaw.files,'Engine source payload');
+  const rawExecutionPolicy=engineRaw?.executionPolicy&&typeof engineRaw.executionPolicy==='object'?engineRaw.executionPolicy:{};
+  if(rawExecutionPolicy.mode!=='per-installation-entitlement-intersection-v1'||rawExecutionPolicy.fileClassification!=='component'||rawExecutionPolicy.sharedFiles!=='always-required'||rawExecutionPolicy.componentFiles!=='apply-only-when-authorized')throw new Error('Engine artifact component execution policy is invalid');
+  const rawCounts=engineRaw?.componentFileCounts&&typeof engineRaw.componentFileCounts==='object'?engineRaw.componentFileCounts:{};
+  for(const key of ['shared','apex','mcp','studio']){
+    const expected=engineRaw.files.filter(file=>String(file?.component||'shared').toLowerCase()===key).length;
+    if(Number(rawCounts[key]||0)!==expected)throw new Error('Engine artifact component file count mismatch for '+key);
+  }
   engine={
     ...engineRaw,
     components:engineTargets,
@@ -71,7 +71,6 @@ if(engineTargets.length){
     releaseId:'update-'+version+'-engine'
   };
 }
-
 let panel=null;
 if(baseTarget){
   const patch=readGzipJson(basePatchArtifact,'Base patch');
@@ -89,7 +88,7 @@ const releaseNotes=existsSync(releaseNotesFile)?readFileSync(releaseNotesFile,'u
 const releaseAnalysis=existsSync(releaseAnalysisFile)?JSON.parse(readFileSync(releaseAnalysisFile,'utf8')):{};
 const database=engineRaw?.database&&typeof engineRaw.database==='object'?engineRaw.database:{format:'orbitfs-db-migrations-v1',mode:'shared-panel',provider:'supabase',migrationCount:0,migrations:[]};
 const migrations=Array.isArray(database.migrations)?database.migrations:[];
-const changedMigrationCount=Number(engineRaw.databaseChangedMigrationCount||0);
+const changedMigrationCount=Number(engineRaw?.databaseChangedMigrationCount||0);
 if(database.format!=='orbitfs-db-migrations-v1'||database.mode!=='shared-panel'||database.provider!=='supabase')throw new Error('Update database migration contract is invalid');
 if(Number(database.migrationCount||0)!==migrations.length||Number(engineRaw.databaseMigrationCount||0)!==migrations.length)throw new Error('Update database migration count does not match its migration list');
 if(!Number.isInteger(changedMigrationCount)||changedMigrationCount<0||changedMigrationCount>migrations.length)throw new Error('Changed database migration count is invalid');
