@@ -142,7 +142,7 @@ jobs:
             git diff --name-status HEAD origin/main -- supabase/migrations || true
             exit 1
           fi
-          echo "Stage 1 Engine database migrations match current main at the inspected UPDATE_RELEASE commit."
+          echo "Stage 1 Engine database migrations match current main at the inspected main commit."
 
       - name: Set up Node
         if: steps.profile.outputs.run == 'true'
