@@ -551,7 +551,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Validate candidate
-        if: steps.profile.outputs.run == 'true'
         env:
           LICENSE_MASTER_URL: ${{ needs.candidate.outputs.license_master_url }}
           LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
@@ -579,5 +578,4 @@ jobs:
           echo "License Manager validation passed."
 
       - name: Review handoff ready
-        if: steps.profile.outputs.run == 'true'
         run: echo "License Manager validation completed. When Auto technical approval is enabled, the exact validated candidate is approved automatically for Billing Store final review. Publication remains a separate Billing Store action."
