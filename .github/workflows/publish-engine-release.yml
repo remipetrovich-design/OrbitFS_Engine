@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       source_sha:
-        description: Exact main commit inspected by Dev Panel
+        description: Exact UPDATE_RELEASE commit inspected by Dev Panel
         required: true
         type: string
       channel:
@@ -95,8 +95,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$GITHUB_REF_NAME" != "main" ]; then
-            echo "::error::Engine/add-on update candidates are built from main."
+          if [ "$GITHUB_REF_NAME" != "UPDATE_RELEASE" ]; then
+            echo "::error::Engine/add-on update candidates are built from UPDATE_RELEASE."
             exit 1
           fi
 
@@ -118,7 +118,7 @@ jobs:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
 
-      - name: Verify main source identity
+      - name: Verify UPDATE_RELEASE source identity
         if: steps.profile.outputs.run == 'true'
         env:
           INSPECTED_SHA: ${{ inputs.source_sha }}
@@ -126,8 +126,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$INSPECTED_SHA" || { echo "::error::Checked-out source does not match Dev Panel inspection."; exit 1; }
-          git fetch origin main --prune
-          test "$(git rev-parse origin/main)" = "$INSPECTED_SHA" || { echo "::error::main moved after Dev Panel inspection. Inspect again before building."; exit 1; }
+          git fetch origin UPDATE_RELEASE --prune
+          test "$(git rev-parse origin/UPDATE_RELEASE)" = "$INSPECTED_SHA" || { echo "::error::UPDATE_RELEASE moved after Dev Panel inspection. Inspect again before building."; exit 1; }
 
       - name: Require release database tree to match current main
         if: steps.profile.outputs.run == 'true'
@@ -142,7 +142,7 @@ jobs:
             git diff --name-status HEAD origin/main -- supabase/migrations || true
             exit 1
           fi
-          echo "Stage 1 Engine database migrations match current main at the inspected main commit."
+          echo "Stage 1 Engine database migrations match current main at the inspected UPDATE_RELEASE commit."
 
       - name: Set up Node
         if: steps.profile.outputs.run == 'true'
