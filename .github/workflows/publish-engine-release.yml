@@ -406,13 +406,15 @@ jobs:
           if(policy.mode!=='per-installation-entitlement-intersection-v1'||policy.fileClassification!=='component'||policy.sharedFiles!=='always-required'||policy.componentFiles!=='apply-only-when-authorized')throw new Error('Update Bundle component execution policy is invalid');
           const counts=p.componentFileCounts||{};
           for(const key of ['shared','apex','mcp','studio'])if(!Number.isInteger(Number(counts[key]||0))||Number(counts[key]||0)<0)throw new Error('Update Bundle component file counts are invalid');
-          const engineTargets=p.components||[];
+          const engineTargets=(p.components||[]).filter(c=>c!=='base');
           if(engineTargets.length&&!p.payloads?.engine)throw new Error('Engine/add-on targets are missing Engine payload');
           if(!engineTargets.length&&p.payloads?.engine)throw new Error('Unexpected Engine payload');
           let files=0;
           for(const [name,payload] of Object.entries(p.payloads||{})){
             if(!payload)continue;
-            if(!Array.isArray(payload.files)||!payload.files.length)throw new Error(name+' payload file list invalid');
+            if(!Array.isArray(payload.files))throw new Error(name+' payload file list invalid');
+            if(name==='panel'&&!payload.files.length&&!(Array.isArray(payload.deletePaths)&&payload.deletePaths.length))throw new Error('Base patch payload is empty');
+            if(name!=='panel'&&!payload.files.length)throw new Error(name+' payload file list invalid');
             for(const f of payload.files){
               const d=Buffer.from(f.data,'base64');
               if(d.length!==f.size||crypto.createHash('sha256').update(d).digest('hex')!==f.sha256)throw new Error(name+' payload integrity failure: '+f.file);
