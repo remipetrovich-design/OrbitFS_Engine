@@ -69,8 +69,6 @@ if(engineTargets.length){
   };
 }
 
-const panel=null;
-const baseBaseline=null;
 const releaseNotes=existsSync(releaseNotesFile)?readFileSync(releaseNotesFile,'utf8'):'';
 const releaseAnalysis=existsSync(releaseAnalysisFile)?JSON.parse(readFileSync(releaseAnalysisFile,'utf8')):{};
 const database=engineRaw?.database&&typeof engineRaw.database==='object'?engineRaw.database:{format:'orbitfs-db-migrations-v1',mode:'shared-panel',provider:'supabase',migrationCount:0,migrations:[]};
@@ -125,6 +123,8 @@ const payload={
   changedFileCount:Number(engineRaw.changedFileCount||0),
   componentFileCounts,
   executionPolicy,
+  updateScope:'engine-components-only-v1',
+  executor:'orbitfs-base-inner-deployer-v1',
   checkpointRequired:true,
   minimumEngineDeployerProtocol,
   minimumBaseVersion,
@@ -138,10 +138,9 @@ const payload={
   databaseMigrationCount:migrations.length,
   databaseChangedMigrationCount:changedMigrationCount,
   fileCount,
-  baseBaseline,
   projectSettings:engine?.projectSettings||{},
-  payloads:{panel,engine}
+  payloads:{engine}
 };
 const archive=gzipSync(Buffer.from(JSON.stringify(payload)),{level:9});
 writeFileSync(output,archive);
-console.log(JSON.stringify({ok:true,format:payload.format,version,components,componentVersions,minimumBaseVersion,baseCompatibilityChannel,minimumEngineDeployerProtocol,databaseMigrationCount:migrations.length,databaseChangedMigrationCount:changedMigrationCount,panelFiles:panel?.files?.length||0,engineFiles:engine?.files?.length||0,fileCount,archiveBytes:archive.length,sha256:createHash('sha256').update(archive).digest('hex')},null,2));
+console.log(JSON.stringify({ok:true,format:payload.format,version,components,componentVersions,minimumBaseVersion,baseCompatibilityChannel,minimumEngineDeployerProtocol,databaseMigrationCount:migrations.length,databaseChangedMigrationCount:changedMigrationCount,engineFiles:engine?.files?.length||0,fileCount,archiveBytes:archive.length,sha256:createHash('sha256').update(archive).digest('hex')},null,2));
