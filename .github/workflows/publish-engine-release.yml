@@ -21,6 +21,11 @@ on:
         required: true
         default: stable
         type: string
+      base:
+        description: OrbitFS Base files changed
+        required: true
+        default: false
+        type: boolean
       apex:
         description: APEX engine changed
         required: true
@@ -101,6 +106,7 @@ jobs:
           fi
 
           components=()
+          if [ "${{ inputs.base }}" = "true" ]; then components+=(base); fi
           if [ "${{ inputs.apex }}" = "true" ]; then components+=(apex); fi
           if [ "${{ inputs.mcp }}" = "true" ]; then components+=(mcp); fi
           if [ "${{ inputs.studio }}" = "true" ]; then components+=(studio); fi
