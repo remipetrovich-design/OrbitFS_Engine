@@ -26,7 +26,7 @@ const fail=(message:string,status=400,code='MCP_POLICY_ERROR')=>Object.assign(ne
 export async function getMcpAdminPolicy(force=false){
   if(!force&&policyCache&&policyCache.expiresAt>Date.now())return policyCache.value;
   const db=getSupabaseAdmin();
-  const result=await db.from('orbitfs_settings').select('value,updated_at').eq('scope_type','global').eq('key','mcp.admin_policy').order('updated_at',{ascending:false}).limit(1).maybeSingle();
+  const result=await db.from('orbitfs_settings').select('value,updated_at').eq('scope_type','global').eq('scope_id','').eq('key','mcp.admin_policy').order('updated_at',{ascending:false}).limit(1).maybeSingle();
   if(result.error)throw result.error;
   const raw=obj(result.data?.value),oss=obj(raw.oss),ccs=obj(raw.ccs);
   const value={

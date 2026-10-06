@@ -21,20 +21,20 @@ function sanitize(input:any={}){
 
 export async function getMcpAdminPolicy(){
   const db=getSupabaseAdmin();
-  const result=await db.from('orbitfs_settings').select('value').eq('scope_type','global').eq('key','mcp.admin_policy').order('updated_at',{ascending:false}).limit(1).maybeSingle();
+  const result=await db.from('orbitfs_settings').select('value').eq('scope_type','global').eq('scope_id','').eq('key','mcp.admin_policy').order('updated_at',{ascending:false}).limit(1).maybeSingle();
   if(result.error)throw result.error;
   return sanitize(result.data?.value||DEFAULTS);
 }
 
 export async function saveMcpAdminPolicy(input:any){
   const db=getSupabaseAdmin(),value=sanitize(input);
-  const existing=await db.from('orbitfs_settings').select('id').eq('scope_type','global').eq('key','mcp.admin_policy').order('updated_at',{ascending:false}).limit(1).maybeSingle();
+  const existing=await db.from('orbitfs_settings').select('id').eq('scope_type','global').eq('scope_id','').eq('key','mcp.admin_policy').order('updated_at',{ascending:false}).limit(1).maybeSingle();
   if(existing.error)throw existing.error;
   if(existing.data?.id){
     const update=await db.from('orbitfs_settings').update({value,updated_at:now()}).eq('id',existing.data.id);
     if(update.error)throw update.error;
   }else{
-    const insert=await db.from('orbitfs_settings').insert({scope_type:'global',scope_id:null,key:'mcp.admin_policy',value,updated_at:now()});
+    const insert=await db.from('orbitfs_settings').insert({scope_type:'global',scope_id:'',key:'mcp.admin_policy',value,updated_at:now()});
     if(insert.error)throw insert.error;
   }
   return value;

@@ -101,14 +101,18 @@ function configuredPanelUrl() {
 	return raw?publicUrl(raw,'Panel URL'):null;
 }
 
-async function requireAttachedMcpSetup(actorUserId:string|null) {
+async function requireAttachedMcpSetup(actorUserId:string|null,target:{panelUrl:string|null;hostUrl:string|null}) {
 	const db=getSupabaseAdmin();
-	const result=await db.from('orbitfs_addons').select('config,runtime,installed,attached').eq('id','mcp').maybeSingle();
+	const result=await db.from('orbitfs_addons').select('config,runtime,installed,attached,configured').eq('id','mcp').maybeSingle();
 	if(result.error)throw result.error;
 	const row:any=result.data;
 	if(!row||row.installed!==true||row.attached!==true)return;
-	const config=objectValue(row.config),runtime=objectValue(row.runtime),setup=objectValue(config.engineSetup),stamp=now();
-	const version=Number(runtime.setupVersion||setup.version||1);
+	const config=objectValue(row.config),runtime=objectValue(row.runtime),setup=objectValue(config.engineSetup),link=objectValue(config.engineHostLink);
+	const samePanel=String(link.panelUrl||'').replace(/\/$/,'')===String(target.panelUrl||'').replace(/\/$/,'');
+	const sameHost=String(link.hostUrl||'').replace(/\/$/,'')===String(target.hostUrl||'').replace(/\/$/,'');
+	const setupComplete=row.configured===true&&String(runtime.setupState||setup.state||'')==='complete';
+	if(samePanel&&sameHost&&setupComplete)return;
+	const stamp=now(),version=Number(runtime.setupVersion||setup.version||1);
 	const updated=await db.from('orbitfs_addons').update({
 		configured:false,status:'attached',
 		config:{...config,engineSetup:{...setup,state:'required',version,automatic:false,configurationReviewedAt:null,configurationReviewedByUserId:null,updatedAt:stamp,updatedByUserId:actorUserId}},
@@ -126,7 +130,7 @@ export async function linkSharedEngineHost(input:Record<string,any>) {
 	if(['linked','ready'].includes(current.state)&&current.panelUrl&&current.panelUrl!==panelUrl)throw Object.assign(new Error('This Shared Engine Host is already linked to another OrbitFS Panel.'),{status:409,code:'ENGINE_HOST_ALREADY_LINKED'});
 	const stamp=now(),actorUserId=String(input.actorUserId||input.actor_user_id||'').trim()||null;
 	const linked=await saveSharedEngineHostState({state:'ready',panelUrl,hostUrl:current.hostUrl||runtimeHostUrl(),linkedAt:current.linkedAt||stamp,linkedByUserId:actorUserId||current.linkedByUserId,lastSyncAt:stamp,lastHealthAt:stamp,lastError:null},current);
-	await requireAttachedMcpSetup(actorUserId);
+	await requireAttachedMcpSetup(actorUserId,{panelUrl:linked.panelUrl,hostUrl:linked.hostUrl});
 	return linked;
 }
 

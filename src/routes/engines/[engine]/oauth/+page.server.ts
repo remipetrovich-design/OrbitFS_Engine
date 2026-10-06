@@ -2,7 +2,7 @@ import { fail } from '@sveltejs/kit';
 import { requireAdmin } from '$lib/server/auth';
 import { writeAudit } from '$lib/server/audit';
 import { getEngineHubEngine } from '$lib/server/engine-hub';
-import { MCP_RESOURCE, OAUTH_ISSUER, OAUTH_SCOPES } from '$lib/server/mcp-oauth';
+import { OAUTH_ISSUER, OAUTH_SCOPES, resolveMcpResource } from '$lib/server/mcp-oauth';
 import { getSupabaseAdmin } from '$lib/server/supabase';
 
 export async function load({ cookies, params }) {
@@ -10,6 +10,7 @@ export async function load({ cookies, params }) {
 	const engine = await getEngineHubEngine(params.engine);
 	if (engine.id !== 'mcp') return { user, engine, applicable:false, clients:[], tokens:[], endpoints:null };
 	const db = getSupabaseAdmin();
+	const resource = await resolveMcpResource();
 	const [clientsResult,tokensResult] = await Promise.all([
 		db.from('mcp_oauth_clients').select('client_id,client_name,redirect_uris,scope,application_type,client_uri,created_at,updated_at').order('created_at',{ascending:false}).limit(100),
 		db.from('mcp_oauth_tokens').select('client_id,user_id,scope,resource,expires_at,refresh_expires_at,revoked_at,created_at,last_used_at').order('created_at',{ascending:false}).limit(250)
@@ -21,7 +22,7 @@ export async function load({ cookies, params }) {
 		clients:clientsResult.data || [],tokens:tokensResult.data || [],
 		endpoints:{
 			issuer:OAUTH_ISSUER,
-			resource:MCP_RESOURCE,
+			resource,
 			authorization:`${OAUTH_ISSUER}/oauth/authorize`,
 			token:`${OAUTH_ISSUER}/oauth/token`,
 			registration:`${OAUTH_ISSUER}/oauth/register`,
@@ -51,7 +52,7 @@ export const actions = {
 			action:'engine.mcp.oauth.revoke_tokens',
 			targetType:'mcp_oauth_client',
 			targetId:clientId,
-			detail:{engine:'mcp',resource:MCP_RESOURCE}
+			detail:{engine:'mcp',resource:await resolveMcpResource()}
 		});
 		return {ok:true,message:`Revoked active tokens for ${clientId}.`};
 	}

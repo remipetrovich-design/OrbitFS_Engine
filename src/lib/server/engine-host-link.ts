@@ -127,9 +127,12 @@ async function runAutomaticMcpSetup(row:any, host:any, actorUserId:string|null){
 	const panelUrl=String(host.panelUrl||'').replace(/\/$/,'');
 	const hostUrl=String(host.hostUrl||'').replace(/\/$/,'');
 	if(!panelUrl||!hostUrl)throw Object.assign(new Error('MCP OAuth setup requires linked Panel and Engine Host URLs'),{status:409,code:'MCP_OAUTH_URLS_MISSING'});
-	for(const endpoint of [`${panelUrl}/oauth/register`,`${panelUrl}/oauth/token`,`${panelUrl}/oauth/authorize`]){
-		const response=await fetch(endpoint,{method:'GET',redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(15000)}).catch(()=>null);
-		if(!response||response.status===404||response.status>=500)throw Object.assign(new Error(`MCP OAuth endpoint is unavailable: ${endpoint}`),{status:502,code:'MCP_OAUTH_ENDPOINT_UNAVAILABLE'});
+	const metadataUrl=`${panelUrl}/.well-known/oauth-authorization-server`;
+	const metadataResponse=await fetch(metadataUrl,{method:'GET',redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(15000)}).catch(()=>null);
+	if(!metadataResponse||!metadataResponse.ok)throw Object.assign(new Error('MCP OAuth authorization-server metadata is unavailable'),{status:502,code:'MCP_OAUTH_METADATA_UNAVAILABLE'});
+	const metadata:any=await metadataResponse.json().catch(()=>null);
+	if(!metadata||String(metadata.issuer||'')!==panelUrl||String(metadata.authorization_endpoint||'')!==`${panelUrl}/oauth/authorize`||String(metadata.token_endpoint||'')!==`${panelUrl}/oauth/token`||String(metadata.registration_endpoint||'')!==`${panelUrl}/oauth/register`||!Array.isArray(metadata.code_challenge_methods_supported)||!metadata.code_challenge_methods_supported.includes('S256')){
+		throw Object.assign(new Error('MCP OAuth authorization-server metadata does not match this installation'),{status:502,code:'MCP_OAUTH_METADATA_INVALID'});
 	}
 	const discovery=await fetch(`${hostUrl}/.well-known/oauth-protected-resource/mcp`,{cache:'no-store',signal:AbortSignal.timeout(15000)}).catch(()=>null);
 	if(!discovery||!discovery.ok)throw Object.assign(new Error('MCP OAuth protected-resource discovery is unavailable'),{status:502,code:'MCP_OAUTH_DISCOVERY_UNAVAILABLE'});
