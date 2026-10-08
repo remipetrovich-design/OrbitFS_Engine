@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { getSupabaseAdmin } from '$lib/server/supabase';
-import { workspaceRole } from '$lib/server/workspaces';
+import { readWorkspaceSettings, workspaceRole } from '$lib/server/workspaces';
+import { mcpClientWorkspaceIds, isSelectableMcpWorkspace } from './mcp-workspace-selection';
 import {
   normalizePath, findEntry, listEntries, readEntryBytes, writeFileBytes,
   createFolder as createCloudFolder, moveEntry as moveCloudEntry, purgeEntry,
@@ -95,7 +96,7 @@ export async function createCloudMcpIdentity(
   };
   if (!clientPermissions.read) throw err('MCP client read permission is disabled', 403, 'CLIENT_READ_DISABLED');
 
-  const clientWorkspaceIds = Array.isArray(client?.workspace_ids) ? client.workspace_ids.map(String).filter(Boolean) : [];
+  const clientWorkspaceIds = mcpClientWorkspaceIds(client);
   const workspaces = await accessibleMcpWorkspaces(user, false, clientWorkspaceIds);
   const workspaceIds = workspaces.map((w: any) => String(w.id));
   const identity: CloudMcpIdentity = {
@@ -147,9 +148,10 @@ export async function accessibleMcpWorkspaces(user: OrbitUser, force = false, cl
     .order('name');
   if (grantedIds.length) workspaceQuery = workspaceQuery.in('id', grantedIds);
 
-  const [workspaceResult, membershipResult] = await Promise.all([
+  const [workspaceResult, membershipResult, globalSettings] = await Promise.all([
     workspaceQuery,
-    db.from('orbitfs_workspace_members').select('workspace_id,role,mcp_enabled').eq('user_id', user.id)
+    db.from('orbitfs_workspace_members').select('workspace_id,role,mcp_enabled').eq('user_id', user.id),
+    readWorkspaceSettings()
   ]);
   if (workspaceResult.error) throw workspaceResult.error;
   if (membershipResult.error) throw membershipResult.error;
@@ -157,7 +159,7 @@ export async function accessibleMcpWorkspaces(user: OrbitUser, force = false, cl
   const systemRole = String(user.role || 'user').toLowerCase();
   const memberships = new Map((membershipResult.data || []).map((row: any) => [String(row.workspace_id), row]));
   const visible = (workspaceResult.data || []).flatMap((workspace: any) => {
-    if (workspace.mcp_system_enabled === false) return [];
+    if (!isSelectableMcpWorkspace(workspace, globalSettings)) return [];
     const membership: any = memberships.get(String(workspace.id));
     if (membership?.mcp_enabled === false) return [];
     const ownsWorkspace = String(workspace.owner_id || workspace.created_by || '') === String(user.id);
@@ -172,7 +174,9 @@ export async function accessibleMcpWorkspaces(user: OrbitUser, force = false, cl
 }
 
 export async function chooseWorkspace(identity: CloudMcpIdentity, requested?: string | null) {
-  const rows: any[] = identity.workspaceSnapshot?.length ? identity.workspaceSnapshot : await accessibleMcpWorkspaces(identity.user);
+  const rows: any[] = Array.isArray(identity.workspaceSnapshot)
+    ? identity.workspaceSnapshot
+    : await accessibleMcpWorkspaces(identity.user, false, identity.clientWorkspaceIds);
   const q = String(requested || identity.currentWorkspaceId || '').trim().toLowerCase();
   let selected: any = null;
   if (q) {
