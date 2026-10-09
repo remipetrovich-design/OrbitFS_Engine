@@ -64,6 +64,26 @@ on:
         required: false
         default: "[]"
         type: string
+      database_source_commit:
+        description: Exact Master Database source commit validated by the Release Control Panel
+        required: true
+        type: string
+      base_source_sha:
+        description: Exact Base source commit selected for a Base-targeting Update
+        required: false
+        type: string
+      base_source_repo:
+        description: Base source repository pinned by the Release Control Panel
+        required: false
+        type: string
+      base_source_ref:
+        description: Base release source ref pinned by the Release Control Panel
+        required: false
+        type: string
+      base_previous_source_commit:
+        description: Published Base source baseline to compare when Base is targeted
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -131,21 +151,6 @@ jobs:
           git fetch origin UPDATE_RELEASE --prune
           test "$(git rev-parse origin/UPDATE_RELEASE)" = "$INSPECTED_SHA" || { echo "::error::UPDATE_RELEASE moved after Dev Panel inspection. Inspect again before building."; exit 1; }
 
-      - name: Require release database tree to match current main
-        if: steps.profile.outputs.run == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main --prune
-          release_tree="$(git rev-parse "HEAD:supabase/migrations")"
-          main_tree="$(git rev-parse "origin/main:supabase/migrations")"
-          if [ "$release_tree" != "$main_tree" ]; then
-            echo "::error::Inspected source database migrations differ from current main. Inspect current main again before packaging."
-            git diff --name-status HEAD origin/main -- supabase/migrations || true
-            exit 1
-          fi
-          echo "Stage 1 Engine database migrations match current main at the inspected UPDATE_RELEASE commit."
-
       - name: Set up Node
         if: steps.profile.outputs.run == 'true'
         uses: actions/setup-node@v7
@@ -157,15 +162,34 @@ jobs:
         shell: bash
         run: npm ci
 
+      - name: Verify pinned Dev Panel release sources
+        if: steps.profile.outputs.run == 'true'
+        shell: bash
+        env:
+          DATABASE_SOURCE_COMMIT: ${{ inputs.database_source_commit }}
+          BASE_TARGET: ${{ inputs.base }}
+          BASE_SOURCE_SHA: ${{ inputs.base_source_sha }}
+          BASE_SOURCE_REPO: ${{ inputs.base_source_repo }}
+          BASE_SOURCE_REF: ${{ inputs.base_source_ref }}
+          BASE_PREVIOUS_SOURCE_COMMIT: ${{ inputs.base_previous_source_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$DATABASE_SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Dev Panel must pin a valid Master Database source commit."; exit 1; }
+          if [ "$BASE_TARGET" = "true" ]; then
+            [[ "$BASE_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Base update source SHA is missing or invalid. Re-inspect the Base source in Dev Panel."; exit 1; }
+            [[ "$BASE_PREVIOUS_SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Published Base baseline SHA is missing or invalid."; exit 1; }
+            [ "$BASE_SOURCE_SHA" != "$BASE_PREVIOUS_SOURCE_COMMIT" ] || { echo "::error::Base source matches its published baseline; no Base update should be selected."; exit 1; }
+            [ "$BASE_SOURCE_REPO" = "remipetrovich-design/OrbitFS-Base-System" ] || { echo "::error::Base source is not the FALLBACK Base repository."; exit 1; }
+            [[ "$BASE_SOURCE_REF" =~ ^[a-zA-Z0-9._/-]+$ ]] && [[ "$BASE_SOURCE_REF" != *..* ]] || { echo "::error::Invalid Base source ref."; exit 1; }
+          else
+            [ -z "$BASE_SOURCE_SHA$BASE_SOURCE_REPO$BASE_SOURCE_REF$BASE_PREVIOUS_SOURCE_COMMIT" ] || { echo "::error::Base source metadata was supplied without selecting the Base target."; exit 1; }
+          fi
+          echo "Validated pinned Master Database source and declared Base source identity."
+
       - name: Build Engine source
         if: steps.profile.outputs.run == 'true'
         shell: bash
         run: npm run build
-
-      - name: Validate customer database migration history
-        if: steps.profile.outputs.run == 'true'
-        shell: bash
-        run: npm run db:migrations:check
 
       - name: Normalize License Manager URL
         if: steps.profile.outputs.run == 'true'
@@ -310,6 +334,94 @@ jobs:
           else
             echo "No component-specific paths detected; retaining requested targets: $resolved"
           fi
+      - name: Resolve Master Database packages
+        if: steps.profile.outputs.run == 'true'
+        id: database-packages
+        env:
+          LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
+          LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
+          COMPONENTS: ${{ steps.affected.outputs.components }}
+          DATABASE_SOURCE_COMMIT: ${{ inputs.database_source_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$LICENSE_MASTER_API_TOKEN" || { echo "::error::Missing LICENSE_MASTER_API_TOKEN"; exit 1; }
+
+          mkdir -p supabase/migrations/shared supabase/migrations/apex supabase/migrations/mcp supabase/migrations/studio
+          find supabase/migrations/shared supabase/migrations/apex supabase/migrations/mcp supabase/migrations/studio -maxdepth 1 -type f -name '*.sql' -delete
+
+          refs='[]'
+          engine_components="$(tr ',' '\n' <<<"$COMPONENTS" | sed '/^$/d;/^base$/d' | paste -sd, -)"
+          targets=""
+          if [[ ",$COMPONENTS," == *",base,"* ]]; then targets="base"; fi
+          if [ -n "$engine_components" ]; then targets="${targets:+$targets,}engine-shared,$engine_components"; fi
+          test -n "$targets" || { echo "::error::No customer database targets selected."; exit 1; }
+          IFS=',' read -ra parts <<< "$targets"
+
+          for component in "${parts[@]}"; do
+            component="$(echo "$component" | xargs)"
+            [ -n "$component" ] || continue
+
+            list="$(curl --fail-with-body --silent --show-error               -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN"               "$LICENSE_MASTER_URL/database-packages?component=$component")"
+            package_id="$(jq -r --arg pinned "$DATABASE_SOURCE_COMMIT" '[.packages[]? | select((.source_repo // .sourceRepo)=="lucaskerim123/Master-Database-System" and (.source_commit // .sourceCommit)==$pinned and (.status=="candidate" or .status=="current"))] | sort_by(.database_schema_version,.created_at) | last | .id // empty' <<<"$list")"
+
+            if [ -n "$package_id" ]; then
+              response="$(curl --fail-with-body --silent --show-error \
+                -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" \
+                "$LICENSE_MASTER_URL/database-packages/$package_id")"
+              echo "Using Master Database package for $component: $package_id"
+            else
+              echo "::warning::No candidate for pinned Master Database source $DATABASE_SOURCE_COMMIT in $component; verifying last current immutable package."
+              response="$(curl --fail-with-body --silent --show-error \
+                -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" \
+                "$LICENSE_MASTER_URL/database-packages/$component/current")"
+              package_id="$(jq -r '.package.id // empty' <<<"$response")"
+              test -n "$package_id" || { echo "::error::No current database package fallback exists for $component."; exit 1; }
+            fi
+
+            package_source="$(jq -r '.package.sourceCommit // .package.source_commit // empty' <<<"$response")"
+            [ "$package_source" = "$DATABASE_SOURCE_COMMIT" ] || { echo "::error::Database package $component is not from the pinned Master Database source. Expected $DATABASE_SOURCE_COMMIT, got $package_source."; exit 1; }
+            reference="$(jq -c '{id:.package.id,component:.package.component,databaseSchemaVersion:.package.databaseSchemaVersion,sha256:.package.sha256,sourceRepo:.package.sourceRepo,sourceCommit:.package.sourceCommit}' <<<"$response")"
+            refs="$(jq -c --argjson item "$reference" '. + [$item]' <<<"$refs")"
+
+            PACKAGE_RESPONSE="$response" SELECTED_COMPONENTS="$COMPONENTS" PINNED_SOURCE_COMMIT="$DATABASE_SOURCE_COMMIT" node - <<'NODE'
+            const fs=require("fs"),path=require("path"),crypto=require("crypto");
+            const body=JSON.parse(process.env.PACKAGE_RESPONSE||"{}"),pkg=body?.package?.payload;
+            if(!pkg||pkg.format!=="orbitfs-customer-database-package-v1"||pkg.sourceRepo!=="lucaskerim123/Master-Database-System")throw new Error("Invalid Master Database payload");
+            if(String(pkg.sourceCommit||"")!==process.env.PINNED_SOURCE_COMMIT)throw new Error("Database package payload source is different from the Dev Panel's inspected source");
+            const selected=new Set(String(process.env.SELECTED_COMPONENTS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean));
+            const allowed=new Set(["engine-shared",...selected]);
+            if(!allowed.has(pkg.component))throw new Error("Database package is outside selected update targets: "+pkg.component);
+            const expected=pkg.component==="engine-shared"?"shared":pkg.component;
+            const migrations=Array.isArray(pkg.migrations)?pkg.migrations:[];
+            if(Number(pkg.migrationCount)!==migrations.length)throw new Error("Database package migration count mismatch: "+pkg.component);
+            for(const m of migrations){
+              const file=String(m?.file||"").replaceAll("\\","/");
+              const baseName=pkg.component==="base"?file.match(/^supabase\/migrations\/(\d{14}_[A-Za-z0-9._-]+)\.sql$/):null;
+              const match=baseName?[null,'base',baseName[1]]:file.match(/^supabase\/migrations\/(base|shared|apex|mcp|studio)\/(\d{14}_[A-Za-z0-9._-]+)\.sql$/);
+              if(!match||match[1]!==expected||String(m.component||"").toLowerCase()!==expected)throw new Error("Invalid central migration scope: "+file);
+              const bytes=Buffer.from(m.data||"","base64");
+              const sha=crypto.createHash("sha256").update(bytes).digest("hex");
+              if(m.encoding!=="base64"||bytes.length!==Number(m.size)||sha!==String(m.sha256||"").toLowerCase())throw new Error("Central migration integrity failed: "+file);
+              const destination=baseName?"supabase/migrations/base/"+baseName[1]+".sql":file;
+              fs.mkdirSync(path.dirname(destination),{recursive:true});
+              fs.writeFileSync(destination,bytes);
+            }
+            NODE
+
+            echo "Resolved $component database package $package_id"
+          done
+
+          expected="${#parts[@]}"
+          actual="$(jq 'length' <<<"$refs")"
+          [ "$actual" -eq "$expected" ] || { echo "::error::Central database package reference count mismatch."; exit 1; }
+          echo "references=$refs" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Master Database migration material
+        if: steps.profile.outputs.run == 'true'
+        shell: bash
+        run: npm run db:migrations:check
+
       - name: Validate published Base compatibility
         if: steps.profile.outputs.run == 'true'
         id: base-compatibility
@@ -343,10 +455,20 @@ jobs:
 
       - name: Build Base patch candidate
         if: steps.profile.outputs.run == 'true' && contains(format(',{0},', steps.affected.outputs.components), ',base,')
+        env:
+          BASE_PREVIOUS_SOURCE_COMMIT: ${{ inputs.base_previous_source_commit }}
+          BASE_COMPAT_SOURCE: ${{ steps.base-compatibility.outputs.source }}
         run: >-
+          bash -c 'test "$BASE_PREVIOUS_SOURCE_COMMIT" = "$BASE_COMPAT_SOURCE" || { echo "::error::Dev Panel Base baseline does not match the approved Base release selected by License Manager."; exit 1; }; exec "$@"' _
           node tools/build-base-patch.mjs
           --version "${{ inputs.version }}"
           --commit "${{ inputs.source_sha }}"
+          --base-source-repo "${{ inputs.base_source_repo }}"
+          --base-source-ref "${{ inputs.base_source_ref }}"
+          --base-source-sha "${{ inputs.base_source_sha }}"
+          --base-previous-source-commit "${{ inputs.base_previous_source_commit }}"
+          --base-baseline-release-id "${{ steps.base-compatibility.outputs.id }}"
+          --base-baseline-version "${{ steps.base-compatibility.outputs.version }}"
           --output base-patch.json.gz
 
       - name: Build private Engine candidate
@@ -459,47 +581,6 @@ jobs:
         id: checksum
         shell: bash
         run: echo "sha256=$(sha256sum update-release.json.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-
-      - name: Register Engine database package candidates
-        if: steps.profile.outputs.run == 'true'
-        id: database-packages
-        env:
-          LICENSE_MASTER_URL: ${{ steps.license-master.outputs.url }}
-          LICENSE_MASTER_API_TOKEN: ${{ secrets.LICENSE_MASTER_API_TOKEN }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          COMPONENTS: ${{ steps.affected.outputs.components }}
-          MINIMUM_BASE_VERSION: ${{ inputs.minimum_base_version }}
-          MINIMUM_BASE_SCHEMA_VERSION: ${{ steps.base-compatibility.outputs.schema_version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$LICENSE_MASTER_API_TOKEN" || { echo "::error::Missing LICENSE_MASTER_API_TOKEN"; exit 1; }
-          refs='[]'
-          database_components="$(tr ',' '\n' <<<"$COMPONENTS" | sed '/^$/d;/^base$/d' | paste -sd, -)"
-          targets="engine-shared${database_components:+,$database_components}"
-          IFS=',' read -ra parts <<< "$targets"
-          for component in "${parts[@]}"; do
-            component="$(echo "$component" | xargs)"
-            [ -n "$component" ] || continue
-            package_file="/tmp/database-package-$component.json"
-            node tools/build-database-package.mjs \
-              --component "$component" \
-              --commit "$SOURCE_SHA" \
-              --minimum-base-version "$MINIMUM_BASE_VERSION" \
-              --minimum-base-schema-version "$MINIMUM_BASE_SCHEMA_VERSION" \
-              --output "$package_file"
-            response="$(curl --fail-with-body --silent --show-error -X POST "$LICENSE_MASTER_URL/database-packages" \
-              -H "Authorization: Bearer $LICENSE_MASTER_API_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data-binary @"$package_file")"
-            reference="$(jq -c '{id:.package.id,component:.package.component,databaseSchemaVersion:.package.databaseSchemaVersion,sha256:.package.sha256,sourceCommit:.package.sourceCommit}' <<<"$response")"
-            refs="$(jq -c --argjson item "$reference" '. + [$item]' <<<"$refs")"
-          done
-          component_count="$(tr ',' '\n' <<<"$COMPONENTS" | sed '/^$/d;/^base$/d' | wc -l | xargs)"
-          expected_count="$((1 + component_count))"
-          actual_count="$(jq 'length' <<<"$refs")"
-          [ "$actual_count" -eq "$expected_count" ] || { echo "::error::Database package reference count mismatch."; exit 1; }
-          echo "references=$refs" >> "$GITHUB_OUTPUT"
 
       - name: Publish Update Bundle to GitHub Release
         if: steps.profile.outputs.run == 'true'
