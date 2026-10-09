@@ -18,7 +18,7 @@ const baseSource={
   baselineVersion:arg('base-baseline-version').trim(),
   baselineSourceCommit:arg('base-previous-source-commit').trim().toLowerCase()
 };
-if(baseSource.repository!=='lucaskerim123/V1-vercel-base')throw new Error('Base patch source must identify the MAIN Base repository');
+if(baseSource.repository!=='remipetrovich-design/OrbitFS-Base-System')throw new Error('Base patch source must identify the FALLBACK Base repository');
 if(!/^[a-zA-Z0-9._/-]+$/.test(baseSource.ref)||baseSource.ref.includes('..'))throw new Error('Base patch source ref is invalid');
 if(!/^[a-f0-9]{40}$/.test(baseSource.commit)||!/^[a-f0-9]{40}$/.test(baseSource.baselineSourceCommit)||baseSource.commit===baseSource.baselineSourceCommit)throw new Error('Base patch source commits must identify a valid changed source and approved baseline');
 if(!baseSource.baselineReleaseId||!isOrbitReleaseVersion(baseSource.baselineVersion))throw new Error('Base patch requires the approved published Base release identity and version');
