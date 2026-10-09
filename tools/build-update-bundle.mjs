@@ -76,9 +76,22 @@ if(baseTarget){
   const patch=readGzipJson(basePatchArtifact,'Base patch');
   if(patch.format!=='orbitfs-base-update-patch-v1'||Number(patch.schemaVersion)!==1)throw new Error('Base patch artifact format is invalid');
   if(String(patch.version||'')!==version||String(patch.sourceCommit||'')!==String(sourceCommit||''))throw new Error('Base patch identity mismatch');
+  const baseSource=patch.baseSource||{};
+  if(baseSource.repository!=='lucaskerim123/V1-vercel-base'||!/^[a-zA-Z0-9._/-]+$/.test(String(baseSource.ref||''))||String(baseSource.ref).includes('..')||!/^[a-f0-9]{40}$/.test(String(baseSource.commit||''))||!/^[a-f0-9]{40}$/.test(String(baseSource.baselineSourceCommit||''))||baseSource.commit===baseSource.baselineSourceCommit||!String(baseSource.baselineReleaseId||'').trim()||!isOrbitReleaseVersion(String(baseSource.baselineVersion||'')))throw new Error('Base patch is missing approved baseline release provenance');
   validateFiles(patch.files||[],'Base patch',{allowEmpty:true});
   const deletePaths=Array.isArray(patch.deletePaths)?patch.deletePaths.map(v=>String(v||'').replaceAll('\\','/')):[];
-  if(!patch.files?.length&&!deletePaths.length)throw new Error('Base patch is empty');
+  const baseMigrations=Array.isArray(patch.databaseMigrations)?patch.databaseMigrations:[];
+  if(Number(patch.databaseMigrationCount??0)!==baseMigrations.length)throw new Error('Base patch migration count mismatch');
+  const seenBaseIds=new Set();
+  for(const migration of baseMigrations){
+    const path=String(migration?.file||'').replaceAll('\\','/');
+    const match=path.match(/^supabase\/migrations\/(\d{14})_[A-Za-z0-9._-]+\.sql$/);
+    if(!match||String(migration.id)!==match[1]||String(migration.component)!=='base'||seenBaseIds.has(migration.id))throw new Error('Base patch migration identity is invalid');
+    seenBaseIds.add(migration.id);
+    const bytes=Buffer.from(String(migration.data||''),'base64');
+    if(migration.encoding!=='base64'||!bytes.length||bytes.length!==Number(migration.size)||createHash('sha256').update(bytes).digest('hex')!==String(migration.sha256||'').toLowerCase())throw new Error('Base patch migration integrity failed: '+path);
+  }
+  if(!patch.files?.length&&!deletePaths.length&&!baseMigrations.length)throw new Error('Base patch is empty');
   for(const file of deletePaths)if(!safePath.test(file))throw new Error('Unsafe Base delete path: '+file);
   if(new Set(deletePaths).size!==deletePaths.length)throw new Error('Duplicate Base delete path');
   panel={...patch,component:'base',fileCount:Array.isArray(patch.files)?patch.files.length:0,deletePaths};
@@ -86,11 +99,14 @@ if(baseTarget){
 
 const releaseNotes=existsSync(releaseNotesFile)?readFileSync(releaseNotesFile,'utf8'):'';
 const releaseAnalysis=existsSync(releaseAnalysisFile)?JSON.parse(readFileSync(releaseAnalysisFile,'utf8')):{};
-const database=engineRaw?.database&&typeof engineRaw.database==='object'?engineRaw.database:{format:'orbitfs-db-migrations-v1',mode:'shared-panel',provider:'supabase',migrationCount:0,migrations:[]};
-const migrations=Array.isArray(database.migrations)?database.migrations:[];
+const engineDatabase=engineRaw?.database&&typeof engineRaw.database==='object'?engineRaw.database:{format:'orbitfs-db-migrations-v1',mode:'shared-panel',provider:'supabase',migrationCount:0,migrations:[]};
+const baseMigrations=Array.isArray(panel?.databaseMigrations)?panel.databaseMigrations:[];
+const migrations=[...(Array.isArray(engineDatabase.migrations)?engineDatabase.migrations:[]),...baseMigrations];
+const database={...engineDatabase,migrationCount:migrations.length,migrations};
+if(engine){engine.database=database;engine.databaseMigrationCount=migrations.length;}
 const changedMigrationCount=Number(engineRaw?.databaseChangedMigrationCount||0);
 if(database.format!=='orbitfs-db-migrations-v1'||database.mode!=='shared-panel'||database.provider!=='supabase')throw new Error('Update database migration contract is invalid');
-if(Number(database.migrationCount||0)!==migrations.length||(engineRaw&&Number(engineRaw.databaseMigrationCount||0)!==migrations.length))throw new Error('Update database migration count does not match its migration list');
+if(Number(database.migrationCount||0)!==migrations.length||(engineRaw&&Number(engineRaw.databaseMigrationCount||0)!==(migrations.length-baseMigrations.length)))throw new Error('Update database migration count does not match its migration list');
 if(!Number.isInteger(changedMigrationCount)||changedMigrationCount<0||changedMigrationCount>migrations.length)throw new Error('Changed database migration count is invalid');
 if(releaseAnalysis?.flags?.schemaChanged===true&&changedMigrationCount<1)throw new Error('Database/schema changes were detected, but the artifact contains no new immutable customer database migration.');
 const migrationIds=new Set();
@@ -99,9 +115,13 @@ for(const migration of migrations){
   const match=file.match(/^supabase\/migrations\/(shared|base|apex|mcp|studio)\/\d{14}_[A-Za-z0-9._-]+\.sql$/);
   if(!/^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$/.test(id)||migrationIds.has(id))throw new Error('Database migration ids must be unique and valid');
   migrationIds.add(id);
-  if(!match)throw new Error('Invalid customer database migration path: '+file);
+  if(!match&&!/^supabase\/migrations\/\d{14}_[A-Za-z0-9._-]+\.sql$/.test(file))throw new Error('Invalid customer database migration path: '+file);
   const component=String(migration.component||'').toLowerCase();
-  if(component!==match[1])throw new Error('Customer database migration component/path mismatch: '+file);
+  if(match&&component!==match[1])throw new Error('Customer database migration component/path mismatch: '+file);
+  if(!match){
+    const flat=file.match(/^supabase\/migrations\/(\d{14})_[A-Za-z0-9._-]+\.sql$/);
+    if(component!=='base'||!flat||id!==flat[1])throw new Error('Legacy Base forward migration identity is invalid: '+file);
+  }
   if(component==='shared'){
     if(!components.length)throw new Error('Shared customer database migration requires an update target: '+file);
   }else if(!components.includes(component)){

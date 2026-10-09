@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { env } from '$env/dynamic/private';
 import { getSupabaseAdmin } from '$lib/server/supabase';
 import { assertAddonEngineAccepting } from '$lib/server/addon-engine';
+import { getSharedEngineHostState } from '$lib/server/shared-engine-host';
 
 function publicOrigin(value: unknown, fallback: string) {
 	const raw = String(value || fallback).trim();
@@ -16,12 +17,75 @@ function publicOrigin(value: unknown, fallback: string) {
 	}
 }
 
-const ENGINE_ORIGIN = publicOrigin(
+const FALLBACK_ENGINE_ORIGIN = publicOrigin(
 	env.ORBITFS_ENGINE_HOST_URL || env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL,
 	'https://orbitfsengine.vercel.app'
 );
-export const MCP_RESOURCE = `${ENGINE_ORIGIN}/mcp`;
+// Kept as a fallback/export for compatibility. Runtime MCP/OAuth paths resolve
+// the installation's selected Engine address from shared host state.
+export const MCP_RESOURCE = `${FALLBACK_ENGINE_ORIGIN}/mcp`;
 export const OAUTH_ISSUER = publicOrigin(env.ORBITFS_PANEL_URL, 'https://orbitfs.vercel.app');
+
+function normalizedMcpResource(value: unknown) {
+	try {
+		const parsed = new URL(String(value || '').trim());
+		if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+		const path = parsed.pathname.replace(/\/+$/, '') || '/';
+		if (path !== '/mcp') return null;
+		return `${parsed.origin}/mcp`;
+	} catch {
+		return null;
+	}
+}
+
+function resourceFromOrigin(value: unknown) {
+	try { return `${publicOrigin(value, FALLBACK_ENGINE_ORIGIN)}/mcp`; }
+	catch { return null; }
+}
+
+export async function resolveMcpResources() {
+	const resources: string[] = [];
+	let sharedStateAvailable = false;
+	try {
+		const host = await getSharedEngineHostState();
+		sharedStateAvailable = true;
+		if (host.hostUrl) {
+			const current = resourceFromOrigin(host.hostUrl);
+			if (current) resources.push(current);
+		}
+		const projectName = String(host.projectName || '').trim().toLowerCase();
+		if (projectName) {
+			const generated = resourceFromOrigin(`https://${projectName}.vercel.app`);
+			if (generated) resources.push(generated);
+		}
+	} catch {}
+	if (!sharedStateAvailable || !resources.length) {
+		for (const candidate of [env.ORBITFS_ENGINE_HOST_URL, env.VERCEL_PROJECT_PRODUCTION_URL, FALLBACK_ENGINE_ORIGIN]) {
+			if (!candidate) continue;
+			const resource = resourceFromOrigin(candidate);
+			if (resource) resources.push(resource);
+		}
+	}
+	return [...new Set(resources)];
+}
+
+export async function resolveMcpResource() {
+	return (await resolveMcpResources())[0] || MCP_RESOURCE;
+}
+
+export async function resolveRequestMcpResource(request: Request) {
+	const actual = normalizedMcpResource(new URL('/mcp', request.url).toString());
+	const allowed = await resolveMcpResources();
+	if (!actual || !allowed.includes(actual)) {
+		throw Object.assign(new Error('MCP request host is not an approved Engine address'), { status: 400, code: 'MCP_RESOURCE_HOST_INVALID' });
+	}
+	return actual;
+}
+
+export async function mcpResourceMetadataUrl(request: Request) {
+	const resource = await resolveRequestMcpResource(request);
+	return new URL('/.well-known/oauth-protected-resource/mcp', resource).toString();
+}
 export const OAUTH_SCOPES = ['orbitfs:read', 'orbitfs:write', 'offline_access'] as const;
 const ACCESS_TTL_MS = 60 * 60 * 1000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -39,9 +103,12 @@ export function normalizeScope(scope = '') {
 	return [...new Set(allowed.length ? allowed : ['orbitfs:read'])].join(' ');
 }
 
-export function assertResource(resource: string | null | undefined) {
-	if (resource !== MCP_RESOURCE) throw Object.assign(new Error('Invalid OAuth resource'), { status: 400 });
-	return MCP_RESOURCE;
+export async function assertResource(resource: string | null | undefined) {
+	const fallback = await resolveMcpResource();
+	const supplied = normalizedMcpResource(resource || fallback);
+	const allowed = await resolveMcpResources();
+	if (!supplied || !allowed.includes(supplied)) throw Object.assign(new Error('Invalid OAuth resource'), { status: 400, code: 'OAUTH_INVALID_RESOURCE' });
+	return supplied;
 }
 
 export async function getOAuthClient(clientId: string) {
@@ -58,7 +125,7 @@ export async function validateAuthorizationRequest(input: {
 }) {
 	if (input.responseType !== 'code') throw Object.assign(new Error('Only response_type=code is supported'), { status: 400 });
 	if (!input.codeChallenge || input.codeChallengeMethod !== 'S256') throw Object.assign(new Error('PKCE S256 is required'), { status: 400 });
-	const resource = assertResource(input.resource || MCP_RESOURCE);
+	const resource = await assertResource(input.resource || await resolveMcpResource());
 	const client = await getOAuthClient(input.clientId);
 	const redirects = Array.isArray(client.redirect_uris) ? client.redirect_uris.map(String) : [];
 	if (!redirects.includes(input.redirectUri)) throw Object.assign(new Error('Redirect URI is not registered'), { status: 400 });
@@ -97,13 +164,13 @@ async function storeTokens(clientId: string, userId: string, scope: string, reso
 export async function exchangeAuthorizationCode(input: {
 	code: string; clientId: string; redirectUri: string; codeVerifier: string; resource: string;
 }) {
-	assertResource(input.resource);
+	const resource = await assertResource(input.resource);
 	const db = getSupabaseAdmin();
 	const codeHash = sha256(input.code);
 	const { data: row, error } = await db.from('mcp_oauth_codes').select('*').eq('code_hash', codeHash).maybeSingle();
 	if (error) throw error;
 	if (!row || row.consumed_at || new Date(row.expires_at).getTime() <= Date.now()) throw Object.assign(new Error('Invalid or expired authorization code'), { status: 400 });
-	if (row.client_id !== input.clientId || row.redirect_uri !== input.redirectUri || row.resource !== input.resource) throw Object.assign(new Error('Authorization code binding mismatch'), { status: 400 });
+	if (row.client_id !== input.clientId || row.redirect_uri !== input.redirectUri || row.resource !== resource) throw Object.assign(new Error('Authorization code binding mismatch'), { status: 400 });
 	const expected = Buffer.from(String(row.code_challenge));
 	const actual = Buffer.from(pkce(input.codeVerifier));
 	if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw Object.assign(new Error('PKCE verification failed'), { status: 400 });
@@ -120,11 +187,11 @@ export async function exchangeAuthorizationCode(input: {
 }
 
 export async function exchangeRefreshToken(input: { refreshToken: string; clientId: string; resource: string }) {
-	assertResource(input.resource);
+	const resource = await assertResource(input.resource);
 	const db = getSupabaseAdmin();
 	const { data: row, error } = await db.from('mcp_oauth_tokens').select('*').eq('refresh_token_hash', sha256(input.refreshToken)).maybeSingle();
 	if (error) throw error;
-	if (!row || row.revoked_at || row.client_id !== input.clientId || row.resource !== input.resource || !row.refresh_expires_at || new Date(row.refresh_expires_at).getTime() <= Date.now()) {
+	if (!row || row.revoked_at || row.client_id !== input.clientId || row.resource !== resource || !row.refresh_expires_at || new Date(row.refresh_expires_at).getTime() <= Date.now()) {
 		throw Object.assign(new Error('Invalid or expired refresh token'), { status: 400 });
 	}
 	const { data: client, error: clientError } = await db.from('mcp_clients').select('id,status').eq('id',row.client_id).maybeSingle();
@@ -155,7 +222,8 @@ export async function authenticateMcpAccessToken(request: Request) {
 	if (!token || token.revoked_at || new Date(token.expires_at).getTime() <= Date.now()) {
 		throw Object.assign(new Error('Invalid or expired MCP access token'), { status: 401, code: 'MCP_TOKEN_INVALID' });
 	}
-	if (token.resource !== MCP_RESOURCE) throw Object.assign(new Error('MCP token resource mismatch'), { status: 401, code: 'MCP_RESOURCE_MISMATCH' });
+	const requestResource = await resolveRequestMcpResource(request);
+	if (token.resource !== requestResource) throw Object.assign(new Error('MCP token resource mismatch'), { status: 401, code: 'MCP_RESOURCE_MISMATCH' });
 	const user = nestedUser((token as any).orbitfs_users);
 	if (!user || user.status !== 'active') throw Object.assign(new Error('MCP user is unavailable'), { status: 403, code: 'MCP_USER_INACTIVE' });
 	const now = Date.now();

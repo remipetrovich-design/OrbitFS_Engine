@@ -1,13 +1,14 @@
 import { json } from '@sveltejs/kit';
-import { MCP_RESOURCE, OAUTH_ISSUER, OAUTH_SCOPES } from '$lib/server/mcp-oauth';
+import { OAUTH_ISSUER, OAUTH_SCOPES, resolveRequestMcpResource } from '$lib/server/mcp-oauth';
 import { assertAddonEngineAccepting } from '$lib/server/addon-engine';
 
-export async function GET() {
+export async function GET({ request }) {
 	try {
-		await assertAddonEngineAccepting('mcp');
-		const engineOrigin = MCP_RESOURCE.replace(/\/mcp$/, '');
+		await assertAddonEngineAccepting('mcp',{requireSetup:false});
+		const resource = await resolveRequestMcpResource(request);
+		const engineOrigin = resource.replace(/\/mcp$/, '');
 		return json({
-			resource: MCP_RESOURCE,
+			resource,
 			authorization_servers: [OAUTH_ISSUER],
 			bearer_methods_supported: ['header'],
 			scopes_supported: [...OAUTH_SCOPES],

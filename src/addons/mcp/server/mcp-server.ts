@@ -1,11 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { z } from 'zod';
 import widgetHtml from '../ui/widget.html?raw';
 import studioWidgetHtml from '../ui/studio-widget.html?raw';
-import { authenticateMcpAccessToken } from '$lib/server/mcp-oauth';
+import { authenticateMcpAccessToken, mcpResourceMetadataUrl, resolveMcpResource } from '$lib/server/mcp-oauth';
 import { assertMcpLicensed } from '$lib/server/mcp-cloud';
 import { componentLicensed, getPanelLicenseSummary } from '$lib/server/license';
 import { getStartup, getPresets, getPresetMetadata, getPresetBundles, listMcpProjects, projectBundleAssignments, listContextBundles } from '$lib/server/mcp-workspace-state';
@@ -33,16 +32,6 @@ import { parseProfileUpload } from '$lib/server/profile-import';
 
 const SERVER_NAME='OrbitFS MCP', SERVER_VERSION='1.5.0';
 const optimizedWidgetHtml=widgetHtml.replace(/setTimeout\(async\(\)=>\{try\{await call\('orbitfs_ui_state',[\s\S]*?\}\},0\);(?=\s*<\/script>)/,'');
-const requestIdentity=new AsyncLocalStorage<any>();
-const activeIdentity=()=>{const identity=requestIdentity.getStore();if(!identity)throw Object.assign(new Error('MCP request identity is unavailable'),{status:500,code:'MCP_IDENTITY_UNAVAILABLE'});return identity;};
-const identityProxy:any=new Proxy({}, {
-  get(_target,property){return activeIdentity()[property as any];},
-  set(_target,property,value){activeIdentity()[property as any]=value;return true;},
-  has(_target,property){return property in activeIdentity();},
-  ownKeys(){return Reflect.ownKeys(activeIdentity());},
-  getOwnPropertyDescriptor(_target,property){const descriptor=Object.getOwnPropertyDescriptor(activeIdentity(),property);return descriptor?{...descriptor,configurable:true}:{configurable:true,enumerable:true,writable:true,value:activeIdentity()[property as any]};}
-});
-let sharedRuntimePromise:Promise<{server:McpServer;transport:WebStandardStreamableHTTPServerTransport}>|null=null;
 const outputSchema=z.object({ok:z.boolean().optional(),message:z.string().optional(),workspaceId:z.string().optional()}).passthrough();
 const textResult=(message:string,data:any={},meta:any={})=>({content:[{type:'text' as const,text:message}],structuredContent:{ok:true,message,...data},_meta:{...meta,orbitfsUiState:data}});
 const contentResult=(content:string,data:any={},meta:any={})=>({content:[{type:'text' as const,text:content}],structuredContent:{ok:true,...data},_meta:{...meta,orbitfsUiState:data}});
@@ -191,7 +180,7 @@ function createServer(identity:any){
   reg('get_knowledge_impact','Read OrbitFS knowledge impact','Show visible linked Knowledge Items and consumers affected by changing or removing a Knowledge Item.',{workspaceId:z.string(),itemId:z.string()},async(a:any)=>{const r:any=await knowledgeImpactCloud(identity,a.workspaceId,a.itemId);return textResult(`${r.item?.name||a.itemId}: ${r.affectedCount||0} visible dependencies · ${(r.usage||[]).length} consumers · ${(r.linkedItems||[]).length} linked items.`,{workspaceId:a.workspaceId,...r});});  reg('refresh_perms','Refresh OrbitFS permissions','Immediately reload the authenticated user system and workspace authority from Supabase.',{},async()=>{const r=await refreshPermissionsCloud(identity);await auditSystemCommand(identity,'refresh_perms',{workspaceCount:r.workspaceIds.length});return textResult('OrbitFS permissions refreshed.',r);});
   reg('get_user_roles','Get OrbitFS user roles','Return the authenticated user current system role and roles in accessible workspaces.',{workspaceId:z.string().optional()},async({workspaceId}:any)=>{const r=await refreshPermissionsCloud(identity),roles=workspaceId?r.workspaceRoles.filter((x:any)=>String(x.workspaceId)===String(workspaceId)):r.workspaceRoles;await auditSystemCommand(identity,'get_user_roles',{workspaceId:workspaceId||null});return textResult(`System role: ${r.systemRole}. Workspace roles: ${roles.length}.`,{systemRole:r.systemRole,workspaceRoles:roles});});
   reg('refresh_config','Refresh OrbitFS system configuration','System Owner/Admin only. Revalidate MCP licence, Supabase runtime, current permissions and active context state.',{},async()=>{requireAdmin(identity);await assertMcpLicensed();const [perms,status]=await Promise.all([refreshPermissionsCloud(identity),systemStatusCloud(identity)]);await auditSystemCommand(identity,'refresh_config',{workspaceCount:perms.workspaceIds.length});return textResult('OrbitFS system configuration refreshed.',{permissions:perms,status,refreshedAt:new Date().toISOString()});},rw);
-  reg('global_sync','Force OrbitFS global sync','System Owner/Admin only. Re-sync OAuth client workspace grants and MCP runtime state with current Supabase authority.',{reason:z.string().min(3).max(500)},async({reason}:any)=>{requireAdmin(identity);const perms=await refreshPermissionsCloud(identity),db=getSupabaseAdmin();await db.from('mcp_clients').update({workspace_ids:perms.workspaceIds,last_seen_at:new Date().toISOString()}).eq('id',identity.clientId);await db.from('mcp_runtime_state').upsert({id:1,mode:'cloud',workspace_addon_active:true,connector_url:'https://orbitconvert-mcp-addon.vercel.app/mcp',service_status:'running',updated_at:new Date().toISOString()},{onConflict:'id'});await auditSystemCommand(identity,'global_sync',{reason,workspaceCount:perms.workspaceIds.length});return textResult('OrbitFS global sync completed.',{reason,permissions:perms,syncedAt:new Date().toISOString()});},rw);
+  reg('global_sync','Force OrbitFS global sync','System Owner/Admin only. Re-sync OAuth client workspace grants and MCP runtime state with current Supabase authority.',{reason:z.string().min(3).max(500)},async({reason}:any)=>{requireAdmin(identity);const perms=await refreshPermissionsCloud(identity),db=getSupabaseAdmin();await db.from('mcp_clients').update({workspace_ids:perms.workspaceIds,last_seen_at:new Date().toISOString()}).eq('id',identity.clientId);await db.from('mcp_runtime_state').upsert({id:1,mode:'cloud',workspace_addon_active:true,connector_url:await resolveMcpResource(),service_status:'running',updated_at:new Date().toISOString()},{onConflict:'id'});await auditSystemCommand(identity,'global_sync',{reason,workspaceCount:perms.workspaceIds.length});return textResult('OrbitFS global sync completed.',{reason,permissions:perms,syncedAt:new Date().toISOString()});},rw);
   reg('studio_ui_state','Studio internal UI state','Internal app-only state endpoint for the Studio ChatGPT UI.',{workspaceId:z.string().optional()},async({workspaceId}:any)=>{const p:any=await chooseWorkspace(identity,workspaceId),state:any=await buildStudioUiState(identity,p.workspace.id);state.workspaces=p.workspaces.map((w:any)=>({id:String(w.id),name:w.name,status:w.status||'active'}));return textResult('Studio UI refreshed.',{workspaceId:p.workspace.id,uiState:state},{...appOnly,studioUiState:state});},ro,appOnly);
   reg('studio_set_mode','Set Studio writing mode','Set the current ChatGPT Studio session to normal writing or pure Vent Mode.',{workspaceId:z.string(),mode:z.enum(['normal','vent'])},async(a:any)=>{await chooseWorkspace(identity,a.workspaceId);setStudioModeCloud(identity,a.workspaceId,a.mode);const vent=await studioVentProfile(a.workspaceId,identity),state:any=await buildStudioUiState(identity,a.workspaceId);return textResult(a.mode==='vent'?'Studio Vent Mode enabled.':'Studio Vent Mode disabled.',{workspaceId:a.workspaceId,studioMode:a.mode,behaviourInstructions:a.mode==='vent'?vent.behaviourInstructions:'Studio normal writing mode is active.',ventConfig:vent.config,ventSaveLocation:vent.saveLocation,uiState:state},{...studioMeta,studioUiState:state});},rw,studioMeta);
   reg('studio_get_schema','Get Studio schema','Return current Studio journal/document types, statuses, metadata fields and supported features.',{workspaceId:z.string()},async({workspaceId}:any)=>{await chooseWorkspace(identity,workspaceId);return textResult('Studio schema loaded.',{workspaceId,schema:studioSchema()});});
@@ -210,27 +199,20 @@ function createServer(identity:any){
   return server;
 }
 
-async function sharedRuntime(){
-  if(!sharedRuntimePromise){
-    sharedRuntimePromise=(async()=>{
-      const server=createServer(identityProxy);
-      const transport=new WebStandardStreamableHTTPServerTransport({sessionIdGenerator:undefined});
-      await server.connect(transport);
-      return{server,transport};
-    })().catch((error)=>{sharedRuntimePromise=null;throw error;});
-  }
-  return sharedRuntimePromise;
-}
-
 export async function handleMcpAddonRequest(request:Request){
   try{
     const auth=await authenticateMcpAccessToken(request);await assertMcpLicensed();
     const identity=await createCloudMcpIdentity(request,auth.user,auth.scopes,auth.token);
-    const {transport}=await sharedRuntime();
-    return await requestIdentity.run(identity,()=>transport.handleRequest(request));
+    const server=createServer(identity);
+    const transport=new WebStandardStreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
+    await server.connect(transport);
+    return await transport.handleRequest(request);
   }catch(error:any){
     const status=Number(error?.status||500),headers:any={'content-type':'application/json'};
-    if(status===401)headers['www-authenticate']='Bearer resource_metadata="https://orbitconvert-mcp-addon.vercel.app/.well-known/oauth-protected-resource"';
+    if(status===401){
+      try{headers['www-authenticate']=`Bearer resource_metadata="${await mcpResourceMetadataUrl(request)}"`;}
+      catch{headers['www-authenticate']=`Bearer resource_metadata="${new URL('/.well-known/oauth-protected-resource/mcp',await resolveMcpResource()).toString()}"`;}
+    }
     return new Response(JSON.stringify({error:String(error?.message||'MCP request failed'),code:String(error?.code||'MCP_ERROR')}),{status,headers});
   }
 }
