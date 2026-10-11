@@ -1,0 +1,38 @@
+name: Validate Engine Release Workflow Shell
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-engine-release.yml'
+      - '.github/workflows/validate-engine-release-shell.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shell-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Bash syntax of release workflow steps
+        shell: bash
+        run: |
+          ruby -ryaml -ropen3 -e '
+            file = ".github/workflows/publish-engine-release.yml"
+            workflow = YAML.load_file(file)
+            checked = 0
+            workflow.fetch("jobs").each do |job_id, job|
+              (job["steps"] || []).each do |step|
+                next unless step["run"].is_a?(String)
+                next unless (step["shell"] || job["defaults"]&.dig("run", "shell") || "bash") == "bash"
+                script = step.fetch("run")
+                _, errors, status = Open3.capture3("bash", "-n", stdin_data: script)
+                unless status.success?
+                  warn "Shell syntax failed in #{job_id} / #{step["name"] || step["id"]}: #{errors}"
+                  exit 1
+                end
+                checked += 1
+              end
+            end
+            abort "No Bash steps found" if checked.zero?
+            puts "Validated #{checked} Bash release steps with bash -n"
+          '
