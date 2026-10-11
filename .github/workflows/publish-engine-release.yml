@@ -385,29 +385,29 @@ jobs:
             refs="$(jq -c --argjson item "$reference" '. + [$item]' <<<"$refs")"
 
             PACKAGE_RESPONSE="$response" SELECTED_COMPONENTS="$COMPONENTS" PINNED_SOURCE_COMMIT="$DATABASE_SOURCE_COMMIT" node - <<'NODE'
-            const fs=require("fs"),path=require("path"),crypto=require("crypto");
-            const body=JSON.parse(process.env.PACKAGE_RESPONSE||"{}"),pkg=body?.package?.payload;
-            if(!pkg||pkg.format!=="orbitfs-customer-database-package-v1"||pkg.sourceRepo!=="lucaskerim123/Master-Database-System")throw new Error("Invalid Master Database payload");
-            if(String(pkg.sourceCommit||"")!==process.env.PINNED_SOURCE_COMMIT)throw new Error("Database package payload source is different from the Dev Panel's inspected source");
-            const selected=new Set(String(process.env.SELECTED_COMPONENTS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean));
-            const allowed=new Set(["engine-shared",...selected]);
-            if(!allowed.has(pkg.component))throw new Error("Database package is outside selected update targets: "+pkg.component);
-            const expected=pkg.component==="engine-shared"?"shared":pkg.component;
-            const migrations=Array.isArray(pkg.migrations)?pkg.migrations:[];
-            if(Number(pkg.migrationCount)!==migrations.length)throw new Error("Database package migration count mismatch: "+pkg.component);
-            for(const m of migrations){
-              const file=String(m?.file||"").replaceAll("\\","/");
-              const baseName=pkg.component==="base"?file.match(/^supabase\/migrations\/(\d{14}_[A-Za-z0-9._-]+)\.sql$/):null;
-              const match=baseName?[null,'base',baseName[1]]:file.match(/^supabase\/migrations\/(base|shared|apex|mcp|studio)\/(\d{14}_[A-Za-z0-9._-]+)\.sql$/);
-              if(!match||match[1]!==expected||String(m.component||"").toLowerCase()!==expected)throw new Error("Invalid central migration scope: "+file);
-              const bytes=Buffer.from(m.data||"","base64");
-              const sha=crypto.createHash("sha256").update(bytes).digest("hex");
-              if(m.encoding!=="base64"||bytes.length!==Number(m.size)||sha!==String(m.sha256||"").toLowerCase())throw new Error("Central migration integrity failed: "+file);
-              const destination=baseName?"supabase/migrations/base/"+baseName[1]+".sql":file;
-              fs.mkdirSync(path.dirname(destination),{recursive:true});
-              fs.writeFileSync(destination,bytes);
-            }
-            NODE
+          const fs=require("fs"),path=require("path"),crypto=require("crypto");
+          const body=JSON.parse(process.env.PACKAGE_RESPONSE||"{}"),pkg=body?.package?.payload;
+          if(!pkg||pkg.format!=="orbitfs-customer-database-package-v1"||pkg.sourceRepo!=="lucaskerim123/Master-Database-System")throw new Error("Invalid Master Database payload");
+          if(String(pkg.sourceCommit||"")!==process.env.PINNED_SOURCE_COMMIT)throw new Error("Database package payload source is different from the Dev Panel's inspected source");
+          const selected=new Set(String(process.env.SELECTED_COMPONENTS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean));
+          const allowed=new Set(["engine-shared",...selected]);
+          if(!allowed.has(pkg.component))throw new Error("Database package is outside selected update targets: "+pkg.component);
+          const expected=pkg.component==="engine-shared"?"shared":pkg.component;
+          const migrations=Array.isArray(pkg.migrations)?pkg.migrations:[];
+          if(Number(pkg.migrationCount)!==migrations.length)throw new Error("Database package migration count mismatch: "+pkg.component);
+          for(const m of migrations){
+            const file=String(m?.file||"").replaceAll("\\","/");
+            const baseName=pkg.component==="base"?file.match(/^supabase\/migrations\/(\d{14}_[A-Za-z0-9._-]+)\.sql$/):null;
+            const match=baseName?[null,'base',baseName[1]]:file.match(/^supabase\/migrations\/(base|shared|apex|mcp|studio)\/(\d{14}_[A-Za-z0-9._-]+)\.sql$/);
+            if(!match||match[1]!==expected||String(m.component||"").toLowerCase()!==expected)throw new Error("Invalid central migration scope: "+file);
+            const bytes=Buffer.from(m.data||"","base64");
+            const sha=crypto.createHash("sha256").update(bytes).digest("hex");
+            if(m.encoding!=="base64"||bytes.length!==Number(m.size)||sha!==String(m.sha256||"").toLowerCase())throw new Error("Central migration integrity failed: "+file);
+            const destination=baseName?"supabase/migrations/base/"+baseName[1]+".sql":file;
+            fs.mkdirSync(path.dirname(destination),{recursive:true});
+            fs.writeFileSync(destination,bytes);
+          }
+          NODE
 
             echo "Resolved $component database package $package_id"
           done
