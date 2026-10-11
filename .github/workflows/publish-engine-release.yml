@@ -384,9 +384,11 @@ jobs:
             reference="$(jq -c '{id:.package.id,component:.package.component,databaseSchemaVersion:.package.databaseSchemaVersion,sha256:.package.sha256,sourceRepo:.package.sourceRepo,sourceCommit:.package.sourceCommit}' <<<"$response")"
             refs="$(jq -c --argjson item "$reference" '. + [$item]' <<<"$refs")"
 
-            PACKAGE_RESPONSE="$response" SELECTED_COMPONENTS="$COMPONENTS" PINNED_SOURCE_COMMIT="$DATABASE_SOURCE_COMMIT" node - <<'NODE'
+            package_response_file="$(mktemp)"
+            printf '%s' "$response" > "$package_response_file"
+            PACKAGE_RESPONSE_FILE="$package_response_file" SELECTED_COMPONENTS="$COMPONENTS" PINNED_SOURCE_COMMIT="$DATABASE_SOURCE_COMMIT" node - <<'NODE'
           const fs=require("fs"),path=require("path"),crypto=require("crypto");
-          const body=JSON.parse(process.env.PACKAGE_RESPONSE||"{}"),pkg=body?.package?.payload;
+          const body=JSON.parse(fs.readFileSync(process.env.PACKAGE_RESPONSE_FILE,"utf8")),pkg=body?.package?.payload;
           if(!pkg||pkg.format!=="orbitfs-customer-database-package-v1"||pkg.sourceRepo!=="lucaskerim123/Master-Database-System")throw new Error("Invalid Master Database payload");
           if(String(pkg.sourceCommit||"")!==process.env.PINNED_SOURCE_COMMIT)throw new Error("Database package payload source is different from the Dev Panel's inspected source");
           const selected=new Set(String(process.env.SELECTED_COMPONENTS||"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean));
@@ -408,6 +410,7 @@ jobs:
             fs.writeFileSync(destination,bytes);
           }
           NODE
+            rm -f "$package_response_file"
 
             echo "Resolved $component database package $package_id"
           done
