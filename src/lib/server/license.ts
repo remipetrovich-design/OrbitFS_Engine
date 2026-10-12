@@ -106,7 +106,9 @@ async function activeSourceModeProvider():Promise<string|null>{
    return provider;
   }catch{}
  }
- return null;
+ // Retain the last verified authority during a discovery outage. Never
+ // silently revert an installation that had already selected Fallback to Main.
+ return sourceModeCache?.value||null;
 }
 
 async function configuredProvider(){
