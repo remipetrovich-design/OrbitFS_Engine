@@ -105,14 +105,9 @@ if (existsSync(resolve(ROOT, releaseAnalysisFile))) { try { releaseAnalysis = JS
 const detectedComponents = Array.isArray(releaseAnalysis?.detectedComponents) ? releaseAnalysis.detectedComponents.map((x) => String(x).toLowerCase()) : [];
 const changedComponents = detectedComponents.filter((x) => allowedComponents.has(x) || x === 'shared');
 const selectedSet = new Set(components);
-if (changedComponents.includes('shared')) {
-	for (const component of engineComponents) {
-		if (!selectedSet.has(component)) throw new Error('Shared Engine runtime changes affect APEX, MCP and Studio; select all Engine components for this release.');
-	}
-}
-for (const component of detectedComponents.filter((x) => engineComponents.has(x))) {
-	if (!selectedSet.has(component)) throw new Error('Release contains ' + component + ' changes but ' + component + ' was not selected.');
-}
+// Detected components are informational. Only explicitly selected targets are released.
+// Shared runtime files remain part of the required Engine snapshot, with runtime
+// component entitlement enforcement determining which component files apply.
 const databaseResult = buildDatabaseContract({ root: ROOT, releaseAnalysis, components });
 const database = databaseResult.database;
 const payload = {
