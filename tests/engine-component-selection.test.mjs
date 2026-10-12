@@ -24,9 +24,11 @@ test('Engine-only artifact accepts separately detected Base patch without includ
   assert.ok(!artifact.components.includes('base'));
  }finally{rmSync(cwd,{recursive:true,force:true});}
 });
-test('Engine artifact still rejects a changed Engine component that is not selected',()=>{
+test('Engine artifact permits an APEX-only release despite detected MCP changes',()=>{
  const cwd=fixture();
  try{
-  assert.throws(()=>execFileSync(process.execPath,[builder,'--version','1.1.0','--components','apex','--minimum-base-version','1.1.0','--release-analysis','release-analysis.json','--output','out.json.gz'],{cwd,stdio:'pipe'}),/Command failed/);
+  execFileSync(process.execPath,[builder,'--version','1.1.0','--components','apex','--minimum-base-version','1.1.0','--release-analysis','release-analysis.json','--output','out.json.gz'],{cwd,stdio:'pipe'});
+  const artifact=JSON.parse(gunzipSync(readFileSync(join(cwd,'out.json.gz'))));
+  assert.deepEqual(artifact.components,['apex']);
  }finally{rmSync(cwd,{recursive:true,force:true});}
 });
