@@ -86,12 +86,19 @@ export function buildDatabaseContract({ root = process.cwd(), releaseAnalysis = 
 		if (parsed.component === 'shared') {
 			if (!selected.size) throw new Error('Shared database migration requires at least one Engine component target: ' + file);
 		} else if (!selected.has(parsed.component)) {
-			throw new Error('Database migration belongs to an unselected component: ' + file);
+			// Keep unselected component changes visible in analysis, but out of this package.
+			continue;
 		}
 		changedMigrations.push(parsed.path);
 	}
 
-	if (releaseAnalysis?.flags?.schemaChanged === true && changedMigrations.length === 0) {
+	const scopedSchemaChange = analyzedFiles.some((item) => {
+  const file = normalizePath(item?.file || item?.filename || '');
+  if (!/\\.sql$/i.test(file) && !/(^|\\/)schema(?:\\.|\\/)/i.test(file)) return false;
+  const migration = parseMigrationPath(file);
+  return !migration || migration.component === 'shared' || selected.has(migration.component);
+ });
+ if (releaseAnalysis?.flags?.schemaChanged === true && scopedSchemaChange && changedMigrations.length === 0) {
 		throw new Error('Database/schema changes were detected, but no new immutable customer migration was added.');
 	}
 
