@@ -85,7 +85,33 @@ async function requireOfficialProviderBase(value:string){
   if(!official.some((row:any)=>String(row.base_url)===normalized))throw Object.assign(new Error('That URL is not an enabled official OrbitFS licence API.'),{status:400,code:'LICENSE_PROVIDER_NOT_OFFICIAL'});
   return normalized;
 }
+let sourceModeCache:{value:string;expires:number}|null=null;
+async function activeSourceModeProvider():Promise<string|null>{
+ if(sourceModeCache&&sourceModeCache.expires>Date.now())return sourceModeCache.value;
+ const endpoints=[
+  'https://lm.incendiarynetworks.cc/api/v1/source-configuration',
+  'https://incendiarynetworks.cc/api/v1/source-configuration'
+ ];
+ for(const endpoint of endpoints){
+  try{
+   const response=await fetch(endpoint,{cache:'no-store',signal:AbortSignal.timeout(3500)});
+   if(!response.ok)continue;
+   const config=await response.json();
+   const mode=String(config?.mode||'');
+   if(config?.protocol!==1||(mode!=='fallback'&&mode!=='main'))continue;
+   const expected=mode==='fallback'?'https://lm.incendiarynetworks.cc/api/v1':'https://incendiarynetworks.cc/api/v1';
+   if(config?.active?.licenseApi!==expected)continue;
+   const provider=normalizeProviderBase(expected+'/license');
+   sourceModeCache={value:provider,expires:Date.now()+10000};
+   return provider;
+  }catch{}
+ }
+ return null;
+}
+
 async function configuredProvider(){
+  const authoritative=await activeSourceModeProvider();
+  if(authoritative)return authoritative;
   const official=await officialLicenseProviders();
   const allowed=new Set(official.map((row:any)=>String(row.base_url)));
   let selected=allowed.has(TRUSTED_LICENSE_RUNTIME_URL)?TRUSTED_LICENSE_RUNTIME_URL:String(official[0]?.base_url||TRUSTED_LICENSE_RUNTIME_URL);
