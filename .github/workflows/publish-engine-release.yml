@@ -324,7 +324,7 @@ jobs:
         run: |
           set -euo pipefail
           detected="$(node -e 'const j=require("./release-analysis.json"); const allowed=["base","apex","mcp","studio"],out=[]; for(const raw of (j.detectedComponents||[])){const x=String(raw||"").toLowerCase(); if(x==="shared"){for(const c of ["apex","mcp","studio"])if(!out.includes(c))out.push(c);} else if(allowed.includes(x)&&!out.includes(x))out.push(x);} console.log(out.join(","))' )"
-          resolved="$(REQUESTED="$REQUESTED" DETECTED="$detected" node -e 'const allowed=["base","apex","mcp","studio"], out=[]; for(const raw of [process.env.REQUESTED,process.env.DETECTED]) for(const value of String(raw||"").split(",")){const x=value.trim().toLowerCase(); if(allowed.includes(x)&&(x!=="base"||String(process.env.REQUESTED||"").split(",").includes("base"))&&!out.includes(x))out.push(x)} process.stdout.write(out.join(","))')"
+          resolved="$(REQUESTED="$REQUESTED" node -e 'const allowed=new Set(["base","apex","mcp","studio"]), out=[]; for(const raw of String(process.env.REQUESTED||"").split(",")){const x=raw.trim().toLowerCase(); if(allowed.has(x)&&!out.includes(x))out.push(x)} process.stdout.write(out.join(","))')"
           test -n "$resolved" || { echo "::error::No valid update targets resolved."; exit 1; }
           echo "components=$resolved" >> "$GITHUB_OUTPUT"
           if [ -n "$detected" ]; then
