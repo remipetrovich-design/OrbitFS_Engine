@@ -94,7 +94,7 @@ export function buildDatabaseContract({ root = process.cwd(), releaseAnalysis = 
 
 	const scopedSchemaChange = analyzedFiles.some((item) => {
   const file = normalizePath(item?.file || item?.filename || '');
-  if (!/\\.sql$/i.test(file) && !/(^|\\/)schema(?:\\.|\\/)/i.test(file)) return false;
+  if (!/\.sql$/i.test(file) && !/(^|\/)schema(?:\.|\/)/i.test(file)) return false;
   const migration = parseMigrationPath(file);
   return !migration || migration.component === 'shared' || selected.has(migration.component);
  });
