@@ -127,7 +127,9 @@ async function configuredProvider(){
   }catch{}
   return selected;
 }
-async function masterRequest(path:string,init:RequestInit={}){const h:Record<string,string>={accept:'application/json','content-type':'application/json'};const base=await configuredProvider();const r=await fetch(`${base}${path}`,{...init,headers:{...h,...(init.headers||{})},cache:'no-store',signal:AbortSignal.timeout(timeoutMs())});const text=await r.text();let body:any={};try{body=text?JSON.parse(text):{}}catch{body={error:text||'License Master returned invalid JSON'}}if(!r.ok)throw Object.assign(new Error(body?.error||`License Master returned ${r.status}`),{status:r.status,code:body?.code});return body;}
+async function masterRequest(path:string,init:RequestInit={}){const h:Record<string,string>={accept:'application/json','content-type':'application/json'};const base=await configuredProvider();const start=Date.now(); const request_id=typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2);
+const r=await fetch(`${base}${path}`,{...init,headers:{...h,...(init.headers||{})},cache:'no-store',signal:AbortSignal.timeout(timeoutMs())});
+emitDiagnostic({direction:'egress',source_system:'engine',target:'license_manager',account_mode:'fallback',method:(init.method||'GET').toUpperCase(),endpoint:path,status:r.status,request_id,latency_ms:Date.now()-start,error:null});const text=await r.text();let body:any={};try{body=text?JSON.parse(text):{}}catch{body={error:text||'License Master returned invalid JSON'}}if(!r.ok)throw Object.assign(new Error(body?.error||`License Master returned ${r.status}`),{status:r.status,code:body?.code});return body;}
 function isAuthoritativeHttpError(error:any){
   const status=Number(error?.status||0);
   return status>=400&&status<500&&![408,425,429].includes(status);
