@@ -64,9 +64,82 @@ test('Base-only patch includes exact Base source and published baseline, with fo
     assert.equal(bundle.fileCount,1);
   }finally{rmSync(cwd,{recursive:true,force:true});}
 });
+test('Base patch ignores .gitkeep markers while preserving valid SQL migrations',()=>{
+  const {cwd}=fixture();
+  try{
+    writeFileSync(join(cwd,'supabase/migrations/base/.gitkeep'),'');
+    mkdirSync(join(cwd,'supabase/migrations/base/placeholder'),{recursive:true});
+    writeFileSync(join(cwd,'supabase/migrations/base/placeholder/.gitkeep'),'');
+    const {patch,bundle}=build(cwd);
+    assert.equal(patch.databaseMigrationCount,1);
+    assert.deepEqual(patch.databaseMigrations.map(m=>m.id),['20261009000000']);
+    assert.equal(bundle.databaseMigrationCount,1);
+    assert.ok(patch.databaseMigrations.every(m=>m.file.endsWith('.sql')));
+  }finally{rmSync(cwd,{recursive:true,force:true});}
+});
+test('Base patch skips an empty migration folder placeholder without inventing migrations',()=>{
+  const {cwd}=fixture();
+  try{
+    rmSync(join(cwd,'supabase/migrations/base/20261009000000_forward_update_test.sql'));
+    writeFileSync(join(cwd,'supabase/migrations/base/.gitkeep'),'');
+    const {patch,bundle}=build(cwd);
+    assert.equal(patch.databaseMigrationCount,0);
+    assert.deepEqual(patch.databaseMigrations,[]);
+    assert.equal(bundle.databaseMigrationCount,0);
+    assert.ok(patch.fileCount>0);
+  }finally{rmSync(cwd,{recursive:true,force:true});}
+});
+test('Base migration validation still rejects malformed SQL filenames',()=>{
+  const {cwd}=fixture();
+  try{
+    writeFileSync(join(cwd,'supabase/migrations/base/.gitkeep'),'');
+    writeFileSync(join(cwd,'supabase/migrations/base/bad_migration.sql'),'select 1;');
+    assert.throws(
+      ()=>execFileSync(process.execPath,[builder('build-base-patch.mjs'),...args,'--output','patch.json.gz'],{cwd,stdio:'pipe'}),
+      /Invalid immutable Base migration/
+    );
+  }finally{rmSync(cwd,{recursive:true,force:true});}
+});
+
 test('Base patch build rejects missing approved Base baseline release information',()=>{
   const {cwd}=fixture();
   try {
     assert.throws(()=>execFileSync(process.execPath,[builder('build-base-patch.mjs'),...args.slice(0,-2),'--output','patch.json.gz'],{cwd,stdio:'pipe'}));
   }finally{rmSync(cwd,{recursive:true,force:true});}
+});
+
+test('Base patch build rejects FALLBACK source provenance in MAIN mode',()=>{
+  const {cwd}=fixture();
+  try {
+    const fallbackArgs=args.map((part,index)=>index>0&&args[index-1]==='--base-source-repo'?'remipetrovich-design/OrbitFS-Base-System':part);
+    assert.throws(()=>execFileSync(process.execPath,[builder('build-base-patch.mjs'),...fallbackArgs,'--output','patch.json.gz'],{cwd,stdio:'pipe'}));
+  }finally{rmSync(cwd,{recursive:true,force:true});}
+});
+
+test('targeted Base credential and MCP startup patch is present in the immutable overlay',()=>{
+  const overlay=(path)=>readFileSync(join(repo,'updates/base/overlay',path),'utf8');
+  const account=overlay('src/routes/account/+page.svelte');
+  assert.match(account,/Change password/);
+  assert.match(account,/Current password/);
+  assert.match(account,/Confirm password/);
+  assert.match(account,/action: 'password.change'/);
+  assert.doesNotMatch(account,/Change PIN|New PIN|savePin/);
+
+  const me=overlay('src/routes/api/me/+server.ts');
+  assert.match(me,/body\.pin !== undefined/);
+  assert.doesNotMatch(me,/hashPassword\(pin\)/);
+
+  const credential=overlay('src/routes/api/account/+server.ts');
+  assert.match(credential,/verifyPassword\(currentPassword, row\.password_hash\)/);
+  assert.match(credential,/CURRENT_PASSWORD_INCORRECT/);
+
+  const legacy=overlay('src/routes/api/login/change-pin/+server.ts');
+  assert.match(legacy,/PIN_CHANGE_RETIRED/);
+  assert.match(legacy,/status: 410/);
+
+  const panelRuntime=overlay('src/lib/server/engine-host.ts');
+  assert.match(panelRuntime,/!current\.configured && !\(addonId === 'mcp' && action === 'running'\)/);
+  const engineRuntime=readFileSync(join(repo,'src/lib/server/addon-engine.ts'),'utf8');
+  assert.match(engineRuntime,/!current\.configured && !\(addonId==='mcp' && action==='running'\)/);
+  assert.match(engineRuntime,/options\.requireSetup!==false && !state\.configured/);
 });

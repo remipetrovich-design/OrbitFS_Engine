@@ -23,8 +23,8 @@ const releaseAnalysisFile = arg('release-analysis', 'release-analysis.json');
 const sourceCommit = arg('commit', process.env.GITHUB_SHA || '').trim() || null;
 const minimumUpdaterProtocol = Number(arg('minimum-updater-protocol', arg('minimum-deployer-protocol', process.env.ORBITFS_MINIMUM_UPDATER_PROTOCOL || '2')));
 const minimumBaseVersion = arg('minimum-base-version', process.env.ORBITFS_MINIMUM_BASE_VERSION || '1.0.0').trim();
-const allowedComponents = new Set(['base', 'apex', 'mcp', 'studio']);
-const engineComponents = new Set(['apex', 'mcp', 'studio']);
+const allowedComponents = new Set(['engine-shared', 'apex', 'mcp', 'studio']);
+const engineComponents = new Set(['engine-shared', 'apex', 'mcp', 'studio']);
 const componentManifestPaths = {
 	apex: 'src/addons/apex/manifest.ts',
 	mcp: 'src/addons/mcp/manifest.ts',
@@ -82,7 +82,7 @@ function extractManifestVersion(component) {
 }
 const packageVersion = (() => { try { const pkg=JSON.parse(readFileSync(resolve(ROOT,'package.json'),'utf8')); return String(pkg.version||version); } catch { return version; } })();
 const componentVersions = {};
-for (const component of components.filter((value) => engineComponents.has(value))) componentVersions[component] = extractManifestVersion(component) || packageVersion;
+for (const component of components.filter((value) => engineComponents.has(value))) componentVersions[component] = component==='engine-shared' ? version : extractManifestVersion(component) || packageVersion;
 const files = selected.map((full) => {
 	const path = relative(ROOT, full).replaceAll('\\', '/');
 	if (!path || path.startsWith('../') || path.includes('/../')) throw new Error(`Unsafe release path: ${path}`);

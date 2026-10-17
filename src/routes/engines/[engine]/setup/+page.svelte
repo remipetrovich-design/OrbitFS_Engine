@@ -91,7 +91,7 @@
 		{:else}
 			<div class="setup-grid">
 				<section class:step-ready={panelReady}>
-					<div class="section-head"><span>1</span><div><h2>Panel connection</h2><p>APEX must be installed, licensed and linked from the OrbitFS Panel.</p></div><em>{panelReady ? 'READY' : 'WAITING'}</em></div>
+					<div class="section-head"><span>1</span><div><h2>Panel connection</h2><p>{engine.name} must be installed, licensed and linked from the OrbitFS Panel.</p></div><em>{panelReady ? 'READY' : 'WAITING'}</em></div>
 					<div class="rows"><div><span>Panel link</span><b>{engine.linked ? 'Connected' : 'Not connected'}</b></div><div><span>Workspace</span><b>{engine.workspaceName || engine.workspaceId || 'Not assigned'}</b></div><div><span>Licence</span><b>{engine.licensed ? 'Allowed' : 'Required'}</b></div></div>
 				</section>
 

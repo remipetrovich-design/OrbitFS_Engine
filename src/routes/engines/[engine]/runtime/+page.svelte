@@ -27,6 +27,7 @@
 			<h2>Runtime controls</h2>
 			{#if isMcp}
 				<p class="muted">There is no MCP Standby mode. Vercel handles idle compute automatically; OrbitFS only needs an application-level Running or Stopped state.</p>
+				{#if engine.setupState !== 'complete'}<p class="muted">You can set MCP to Running during first-time setup. Normal MCP requests remain blocked until setup is completed.</p>{/if}
 				<div class="modes two"><div class:active={engine.engineState === 'running'}><b>Running</b><span>MCP accepts authorised transport requests.</span></div><div class:active={engine.engineState === 'stopped'}><b>Stopped</b><span>Administrative hard stop. MCP requests are rejected until started again.</span></div></div>
 			{:else}
 				{#if !standbyAllowed}<p class="muted">Standby is disabled in this Engine's configuration. APEX stays Running until explicitly Stopped.</p>{/if}

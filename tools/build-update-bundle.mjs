@@ -18,7 +18,7 @@ const basePatchArtifact=resolve(ROOT,arg('base-patch-artifact','base-patch.json.
 const output=resolve(ROOT,arg('output','update-release.json.gz'));
 const releaseNotesFile=resolve(ROOT,arg('release-notes','release-notes.md'));
 const releaseAnalysisFile=resolve(ROOT,arg('release-analysis','release-analysis.json'));
-const allowed=new Set(['base','apex','mcp','studio']);
+const allowed=new Set(['base','engine-shared','apex','mcp','studio']);
 const engineTargets=components.filter(c=>c!=='base');
 const baseTarget=components.includes('base');
 const safePath=/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*(?:^|\/)(?:\.git|\.vercel|node_modules)(?:\/|$))[A-Za-z0-9._@+\-\/\[\]()=]+$/;

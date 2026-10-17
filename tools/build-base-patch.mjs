@@ -18,7 +18,7 @@ const baseSource={
   baselineVersion:arg('base-baseline-version').trim(),
   baselineSourceCommit:arg('base-previous-source-commit').trim().toLowerCase()
 };
-if(baseSource.repository!=='remipetrovich-design/OrbitFS-Base-System')throw new Error('Base patch source must identify the FALLBACK Base repository');
+if(baseSource.repository!=='lucaskerim123/V1-vercel-base')throw new Error('Base patch source must identify the MAIN Base repository');
 if(!/^[a-zA-Z0-9._/-]+$/.test(baseSource.ref)||baseSource.ref.includes('..'))throw new Error('Base patch source ref is invalid');
 if(!/^[a-f0-9]{40}$/.test(baseSource.commit)||!/^[a-f0-9]{40}$/.test(baseSource.baselineSourceCommit)||baseSource.commit===baseSource.baselineSourceCommit)throw new Error('Base patch source commits must identify a valid changed source and approved baseline');
 if(!baseSource.baselineReleaseId||!isOrbitReleaseVersion(baseSource.baselineVersion))throw new Error('Base patch requires the approved published Base release identity and version');
@@ -48,7 +48,11 @@ const files=walk(overlayRoot).sort().map(full=>{
 const deletePaths=existsSync(deleteFile)?readFileSync(deleteFile,'utf8').split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&!x.startsWith('#')):[];
 for(const file of deletePaths)if(!safePath.test(file))throw new Error('Unsafe Base delete path: '+file);
 if(new Set(deletePaths).size!==deletePaths.length)throw new Error('Duplicate Base delete path');
-const databaseMigrations=walk(baseMigrationsRoot).sort().map(full=>{
+const databaseMigrations=walk(baseMigrationsRoot)
+  // Empty migration directories keep .gitkeep in Git; it is not SQL and
+  // must never enter the immutable customer migration chain.
+  .filter(full=>relative(baseMigrationsRoot,full).split(/[\\/]/).at(-1)!=='.gitkeep')
+  .sort().map(full=>{
   const filename=relative(baseMigrationsRoot,full).replaceAll('\\','/');
   const match=filename.match(baseMigrationName);
   if(!match)throw new Error('Invalid immutable Base migration: '+filename);

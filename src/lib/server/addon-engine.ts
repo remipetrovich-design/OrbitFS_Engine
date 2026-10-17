@@ -104,7 +104,7 @@ export async function setAddonEngineMode(addonId:string,action:EngineMode|'resta
 	const db=getSupabaseAdmin(),current=await assertAddonEngineLicensed(addonId);
 	if(!current.installed) throw Object.assign(new Error(`OrbitFS ${addonId} engine is not installed`),{status:409,code:'ENGINE_NOT_INSTALLED'});
 	if(!current.attached || !current.linked) throw Object.assign(new Error(`OrbitFS ${addonId} engine is not attached to the Shared Engine Host`),{status:409,code:'ENGINE_NOT_ATTACHED'});
-	if(!current.configured) throw Object.assign(new Error(`Complete OrbitFS ${addonId} first-time setup before changing runtime mode`),{status:409,code:'ENGINE_SETUP_REQUIRED'});
+	if(!current.configured && !(addonId==='mcp' && action==='running')) throw Object.assign(new Error(`Complete OrbitFS ${addonId} first-time setup before changing runtime mode`),{status:409,code:'ENGINE_SETUP_REQUIRED'});
 	const stamp=new Date().toISOString(),nextMode:EngineMode=action==='restart'?'running':action;
 	const {data:row,error:readError}=await db.from('orbitfs_addons').select('runtime').eq('id',addonId).maybeSingle();
 	if(readError) throw readError;

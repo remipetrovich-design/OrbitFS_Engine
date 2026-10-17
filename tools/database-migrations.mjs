@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
-const UPDATE_COMPONENTS = new Set(['base', 'apex', 'mcp', 'studio']);
+const UPDATE_COMPONENTS = new Set(['base', 'engine-shared', 'apex', 'mcp', 'studio']);
 const MAX_MIGRATION_BYTES = 2 * 1024 * 1024;
 const MAX_DATABASE_BYTES = 8 * 1024 * 1024;
 const LEGACY_FLAT_MIGRATIONS = new Set([
